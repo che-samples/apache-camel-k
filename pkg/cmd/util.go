@@ -18,17 +18,17 @@ limitations under the License.
 package cmd
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"reflect"
 	"strings"
 
 	"github.com/apache/camel-k/pkg/util/gzip"
+	"github.com/pkg/errors"
 
 	"github.com/mitchellh/mapstructure"
 
@@ -44,6 +44,12 @@ import (
 
 const (
 	offlineCommandLabel = "camel.apache.org/cmd.offline"
+
+	// Supported source schemes
+	gistScheme   = "gist"
+	githubScheme = "github"
+	httpScheme   = "http"
+	httpsScheme  = "https"
 )
 
 // DeleteIntegration --
@@ -168,15 +174,15 @@ func decode(target interface{}) func(*cobra.Command, []string) error {
 }
 
 func stringToSliceHookFunc(comma rune) mapstructure.DecodeHookFunc {
-	return func(
-		f reflect.Kind,
-		t reflect.Kind,
-		data interface{}) (interface{}, error) {
+	return func(f reflect.Kind, t reflect.Kind, data interface{}) (interface{}, error) {
 		if f != reflect.String || t != reflect.Slice {
 			return data, nil
 		}
 
-		s := data.(string)
+		s, ok := data.(string)
+		if !ok {
+			return []string{}, nil
+		}
 		s = strings.TrimPrefix(s, "[")
 		s = strings.TrimSuffix(s, "]")
 
@@ -211,12 +217,12 @@ func clone(dst interface{}, src interface{}) error {
 
 	data, err := json.Marshal(src)
 	if err != nil {
-		return fmt.Errorf("unable to marshal src: %s", err)
+		return fmt.Errorf("unable to marshal src: %w", err)
 	}
 
 	err = json.Unmarshal(data, dst)
 	if err != nil {
-		return fmt.Errorf("unable to unmarshal into dst: %s", err)
+		return fmt.Errorf("unable to unmarshal into dst: %w", err)
 	}
 	return nil
 }
@@ -243,11 +249,37 @@ func fieldByMapstructureTagName(target reflect.Value, tagName string) (reflect.S
 }
 
 func compressToString(content []byte) (string, error) {
-	var b bytes.Buffer
-
-	if err := gzip.Compress(&b, content); err != nil {
+	bytes, err := gzip.CompressBase64(content)
+	if err != nil {
 		return "", err
 	}
 
-	return base64.StdEncoding.EncodeToString(b.Bytes()), nil
+	return string(bytes), nil
+}
+
+func isLocalAndFileExists(uri string) (bool, error) {
+	if hasSupportedScheme(uri) {
+		// it's not a local file as it matches one of the supporting schemes
+		return false, nil
+	}
+	info, err := os.Stat(uri)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		// If it is a different error (ie, permission denied) we should report it back
+		return false, errors.Wrap(err, fmt.Sprintf("file system error while looking for %s", uri))
+	}
+	return !info.IsDir(), nil
+}
+
+func hasSupportedScheme(uri string) bool {
+	if strings.HasPrefix(strings.ToLower(uri), gistScheme+":") ||
+		strings.HasPrefix(strings.ToLower(uri), githubScheme+":") ||
+		strings.HasPrefix(strings.ToLower(uri), httpScheme+":") ||
+		strings.HasPrefix(strings.ToLower(uri), httpsScheme+":") {
+		return true
+	}
+
+	return false
 }

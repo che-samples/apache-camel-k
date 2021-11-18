@@ -20,16 +20,17 @@ package trait
 import (
 	"fmt"
 
-	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
-	"github.com/apache/camel-k/pkg/platform"
-	"github.com/apache/camel-k/pkg/util"
-	"github.com/apache/camel-k/pkg/util/kubernetes"
-	"github.com/apache/camel-k/pkg/util/openshift"
 	"github.com/pkg/errors"
+
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/apache/camel-k/pkg/platform"
+	"github.com/apache/camel-k/pkg/util/kubernetes"
+	"github.com/apache/camel-k/pkg/util/openshift"
 )
 
 // The Pull Secret trait sets a pull secret on the pod,
@@ -61,21 +62,21 @@ func newPullSecretTrait() Trait {
 }
 
 func (t *pullSecretTrait) Configure(e *Environment) (bool, error) {
-	if util.IsFalse(t.Enabled) {
+	if IsFalse(t.Enabled) {
 		return false, nil
 	}
 
-	if !e.IntegrationInPhase(v1.IntegrationPhaseDeploying) {
+	if !e.IntegrationInRunningPhases() {
 		return false, nil
 	}
 
-	if util.IsNilOrTrue(t.Auto) {
+	if IsNilOrTrue(t.Auto) {
 		if t.SecretName == "" {
 			secret := e.Platform.Status.Build.Registry.Secret
 			if secret != "" {
-				key := client.ObjectKey{Namespace: e.Platform.Namespace, Name: secret}
+				key := ctrl.ObjectKey{Namespace: e.Platform.Namespace, Name: secret}
 				obj := corev1.Secret{}
-				if err := t.Client.Get(t.Ctx, key, &obj); err != nil {
+				if err := t.Client.Get(e.Ctx, key, &obj); err != nil {
 					return false, err
 				}
 				if obj.Type == corev1.SecretTypeDockerConfigJson {
@@ -99,7 +100,7 @@ func (t *pullSecretTrait) Configure(e *Environment) (bool, error) {
 		}
 	}
 
-	return t.SecretName != "" || util.IsTrue(t.ImagePullerDelegation), nil
+	return t.SecretName != "" || IsTrue(t.ImagePullerDelegation), nil
 }
 
 func (t *pullSecretTrait) Apply(e *Environment) error {
@@ -110,7 +111,7 @@ func (t *pullSecretTrait) Apply(e *Environment) error {
 			})
 		})
 	}
-	if util.IsTrue(t.ImagePullerDelegation) {
+	if IsTrue(t.ImagePullerDelegation) {
 		if err := t.delegateImagePuller(e); err != nil {
 			return err
 		}
@@ -120,24 +121,45 @@ func (t *pullSecretTrait) Apply(e *Environment) error {
 }
 
 func (t *pullSecretTrait) delegateImagePuller(e *Environment) error {
-	// Applying the rolebinding directly because it's a resource in the operator namespace
+	// Applying the RoleBinding directly because it's a resource in the operator namespace
 	// (different from the integration namespace when delegation is enabled).
 	rb := t.newImagePullerRoleBinding(e)
-	if err := kubernetes.ReplaceResource(e.C, e.Client, rb); err != nil {
+	if err := kubernetes.ReplaceResource(e.Ctx, e.Client, rb); err != nil {
 		return errors.Wrap(err, "error during the creation of the system:image-puller delegating role binding")
 	}
 	return nil
 }
 
 func (t *pullSecretTrait) newImagePullerRoleBinding(e *Environment) *rbacv1.RoleBinding {
+	targetNamespace := e.Integration.GetIntegrationKitNamespace(e.Platform)
+	var references []metav1.OwnerReference
+	if e.Platform != nil && e.Platform.Namespace == targetNamespace {
+		controller := true
+		blockOwnerDeletion := true
+		references = []metav1.OwnerReference{
+			{
+				APIVersion:         e.Platform.APIVersion,
+				Kind:               e.Platform.Kind,
+				Name:               e.Platform.Name,
+				UID:                e.Platform.UID,
+				Controller:         &controller,
+				BlockOwnerDeletion: &blockOwnerDeletion,
+			},
+		}
+	}
 	serviceAccount := e.Integration.Spec.ServiceAccountName
 	if serviceAccount == "" {
 		serviceAccount = "default"
 	}
 	return &rbacv1.RoleBinding{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "RoleBinding",
+			APIVersion: rbacv1.SchemeGroupVersion.String(),
+		},
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: e.Integration.GetIntegrationKitNamespace(e.Platform),
-			Name:      fmt.Sprintf("camel-k-puller-%s", e.Integration.Namespace),
+			Namespace:       targetNamespace,
+			Name:            fmt.Sprintf("camel-k-puller-%s-%s", e.Integration.Namespace, serviceAccount),
+			OwnerReferences: references,
 		},
 		RoleRef: rbacv1.RoleRef{
 			Kind: "ClusterRole",

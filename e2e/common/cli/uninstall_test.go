@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 // To enable compilation of this file in Goland, go to "Settings -> Go -> Vendoring & Build Tags -> Custom Tags" and add "integration"
@@ -42,6 +43,7 @@ func TestBasicUninstall(t *testing.T) {
 		Eventually(Configmap(ns, "camel-k-maven-settings")).Should(BeNil())
 		Eventually(ServiceAccount(ns, "camel-k-operator")).Should(BeNil())
 		Eventually(OperatorPod(ns)).Should(BeNil())
+		Eventually(KameletList(ns)).Should(BeEmpty())
 	})
 }
 
@@ -98,5 +100,17 @@ func TestUninstallSkipIntegrationPlatform(t *testing.T) {
 		// NOTE: skip CRDs is also required in addition to skip integration platform
 		Expect(Kamel("uninstall", "-n", ns, "--skip-crd", "--skip-cluster-roles", "--skip-integration-platform").Execute()).To(Succeed())
 		Eventually(Platform(ns)).ShouldNot(BeNil())
+	})
+}
+
+func TestUninstallSkipKamelets(t *testing.T) {
+	WithNewTestNamespace(t, func(ns string) {
+		// a successful new installation
+		Expect(Kamel("install", "-n", ns).Execute()).To(Succeed())
+		Eventually(OperatorPod(ns)).ShouldNot(BeNil())
+		Eventually(KameletList(ns)).ShouldNot(BeEmpty())
+		// on uninstall it should remove everything except kamelets
+		Expect(Kamel("uninstall", "-n", ns, "--skip-crd", "--skip-cluster-roles", "--skip-kamelets").Execute()).To(Succeed())
+		Eventually(KameletList(ns)).ShouldNot(BeEmpty())
 	})
 }

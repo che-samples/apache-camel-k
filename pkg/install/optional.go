@@ -21,6 +21,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/apache/camel-k/pkg/util/defaults"
 	"github.com/go-logr/logr"
 
 	"github.com/apache/camel-k/pkg/client"
@@ -28,7 +29,6 @@ import (
 
 // OperatorStartupOptionalTools tries to install optional tools at operator startup and warns if something goes wrong
 func OperatorStartupOptionalTools(ctx context.Context, c client.Client, namespace string, operatorNamespace string, log logr.Logger) {
-
 	// Try to register the OpenShift CLI Download link if possible
 	if err := OpenShiftConsoleDownloadLink(ctx, c); err != nil {
 		log.Info("Cannot install OpenShift CLI download link: skipping.")
@@ -46,9 +46,13 @@ func OperatorStartupOptionalTools(ctx context.Context, c client.Client, namespac
 	}
 
 	if kameletNamespace != "" {
-		if err := KameletCatalog(ctx, c, kameletNamespace); err != nil {
-			log.Info("Cannot install bundled Kamelet Catalog: skipping.")
-			log.V(8).Info("Error while installing bundled Kamelet Catalog", "error", err)
+		if defaults.InstallDefaultKamelets() {
+			if err := KameletCatalog(ctx, c, kameletNamespace); err != nil {
+				log.Info("Cannot install bundled Kamelet Catalog: skipping.")
+				log.V(8).Info("Error while installing bundled Kamelet Catalog", "error", err)
+			}
+		} else {
+			log.Info("Kamelet Catalog installation is disabled")
 		}
 
 		if globalOperator {

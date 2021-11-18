@@ -18,6 +18,7 @@ limitations under the License.
 package trait
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -63,7 +64,7 @@ func (t *openAPITrait) IsPlatformTrait() bool {
 }
 
 func (t *openAPITrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		return false, nil
 	}
 
@@ -145,7 +146,7 @@ func (t *openAPITrait) generateOpenAPIConfigMap(e *Environment, resource v1.Reso
 		Namespace: e.Integration.Namespace,
 		Name:      generatedContentName,
 	}
-	err := t.Client.Get(t.Ctx, key, &cm)
+	err := t.Client.Get(e.Ctx, key, &cm)
 	if err != nil && k8serrors.IsNotFound(err) {
 		return t.createNewOpenAPIConfigMap(e, resource, tmpDir, generatedContentName)
 	} else if err != nil {
@@ -191,7 +192,7 @@ func (t *openAPITrait) createNewOpenAPIConfigMap(e *Environment, resource v1.Res
 	in := path.Join(tmpDir, resource.Name)
 	out := path.Join(tmpDir, "openapi-dsl.xml")
 
-	err = ioutil.WriteFile(in, content, 0644)
+	err = ioutil.WriteFile(in, content, 0o644)
 	if err != nil {
 		return err
 	}
@@ -201,13 +202,12 @@ func (t *openAPITrait) createNewOpenAPIConfigMap(e *Environment, resource v1.Res
 		return err
 	}
 
-	mc := maven.NewContext(tmpDir, project)
+	mc := maven.NewContext(tmpDir)
 	mc.LocalRepository = e.Platform.Status.Build.Maven.LocalRepository
-	mc.Timeout = e.Platform.Status.Build.Maven.GetTimeout().Duration
 	mc.AddArgument("-Dopenapi.spec=" + in)
 	mc.AddArgument("-Ddsl.out=" + out)
 
-	settings, err := kubernetes.ResolveValueSource(e.C, e.Client, e.Platform.Namespace, &e.Platform.Status.Build.Maven.Settings)
+	settings, err := kubernetes.ResolveValueSource(e.Ctx, e.Client, e.Platform.Namespace, &e.Platform.Status.Build.Maven.Settings)
 	if err != nil {
 		return err
 	}
@@ -216,13 +216,13 @@ func (t *openAPITrait) createNewOpenAPIConfigMap(e *Environment, resource v1.Res
 	}
 
 	if e.Platform.Status.Build.Maven.CASecret != nil {
-		certData, err := kubernetes.GetSecretRefData(e.C, e.Client, e.Platform.Namespace, e.Platform.Status.Build.Maven.CASecret)
+		certData, err := kubernetes.GetSecretRefData(e.Ctx, e.Client, e.Platform.Namespace, e.Platform.Status.Build.Maven.CASecret)
 		if err != nil {
 			return err
 		}
 		trustStoreName := "trust.jks"
 		trustStorePass := jvm.NewKeystorePassword()
-		err = jvm.GenerateKeystore(e.C, tmpDir, trustStoreName, trustStorePass, certData)
+		err = jvm.GenerateKeystore(e.Ctx, tmpDir, trustStoreName, trustStorePass, certData)
 		if err != nil {
 			return err
 		}
@@ -232,7 +232,9 @@ func (t *openAPITrait) createNewOpenAPIConfigMap(e *Environment, resource v1.Res
 		)
 	}
 
-	err = maven.Run(mc)
+	ctx, cancel := context.WithTimeout(e.Ctx, e.Platform.Status.Build.GetTimeout().Duration)
+	defer cancel()
+	err = project.Command(mc).Do(ctx)
 	if err != nil {
 		return err
 	}
@@ -245,7 +247,7 @@ func (t *openAPITrait) createNewOpenAPIConfigMap(e *Environment, resource v1.Res
 	if resource.Compression {
 		c, err := gzip.CompressBase64(content)
 		if err != nil {
-			return nil
+			return err
 		}
 
 		content = c

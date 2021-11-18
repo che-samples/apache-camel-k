@@ -29,7 +29,7 @@ import (
 type catalog2deps func(*camel.RuntimeCatalog) []string
 
 const (
-	defaultJsonDataFormat = "json-jackson"
+	defaultJSONDataFormat = "json-jackson"
 )
 
 var (
@@ -58,6 +58,8 @@ var (
 	xqueryRegexp            = regexp.MustCompile(`.*\.xquery\s*\(.*\).*`)
 	xpathRegexp             = regexp.MustCompile(`.*\.?xpath\s*\(.*\).*`)
 	xtokenizeRegexp         = regexp.MustCompile(`.*\.xtokenize\s*\(.*\).*`)
+	singleQuotedKameletEip  = regexp.MustCompile(`kamelet\s*\(\s*'(?://)?([a-z0-9-.]+(/[a-z0-9-.]+)?)(?:$|[^a-z0-9-.].*)'`)
+	doubleQuotedKameletEip  = regexp.MustCompile(`kamelet\s*\(\s*"(?://)?([a-z0-9-.]+(/[a-z0-9-.]+)?)(?:$|[^a-z0-9-.].*)"`)
 
 	sourceCapabilities = map[*regexp.Regexp][]string{
 		circuitBreakerRegexp: {v1.CapabilityCircuitBreaker},
@@ -66,14 +68,14 @@ var (
 	sourceDependencies = map[*regexp.Regexp]catalog2deps{
 		jsonLibraryRegexp: func(catalog *camel.RuntimeCatalog) []string {
 			res := make([]string, 0)
-			if jsonDF := catalog.GetArtifactByDataFormat(defaultJsonDataFormat); jsonDF != nil {
+			if jsonDF := catalog.GetArtifactByDataFormat(defaultJSONDataFormat); jsonDF != nil {
 				res = append(res, jsonDF.GetDependencyID())
 			}
 			return res
 		},
 		jsonLanguageRegexp: func(catalog *camel.RuntimeCatalog) []string {
 			res := make([]string, 0)
-			if jsonDF := catalog.GetArtifactByDataFormat(defaultJsonDataFormat); jsonDF != nil {
+			if jsonDF := catalog.GetArtifactByDataFormat(defaultJSONDataFormat); jsonDF != nil {
 				res = append(res, jsonDF.GetDependencyID())
 			}
 			return res
@@ -237,7 +239,7 @@ func (i *baseInspector) discoverCapabilities(source v1.SourceSpec, meta *Metadat
 // discoverDependencies returns a list of dependencies required by the given source code
 func (i *baseInspector) discoverDependencies(source v1.SourceSpec, meta *Metadata) {
 	for _, uri := range meta.FromURIs {
-		candidateComp, scheme := i.decodeComponent(uri)
+		candidateComp, scheme := i.catalog.DecodeComponent(uri)
 		if candidateComp != nil {
 			i.addDependency(candidateComp.GetDependencyID(), meta)
 			if scheme != nil {
@@ -249,7 +251,7 @@ func (i *baseInspector) discoverDependencies(source v1.SourceSpec, meta *Metadat
 	}
 
 	for _, uri := range meta.ToURIs {
-		candidateComp, scheme := i.decodeComponent(uri)
+		candidateComp, scheme := i.catalog.DecodeComponent(uri)
 		if candidateComp != nil {
 			i.addDependency(candidateComp.GetDependencyID(), meta)
 			if scheme != nil {
@@ -287,22 +289,19 @@ func (i *baseInspector) discoverDependencies(source v1.SourceSpec, meta *Metadat
 	}
 }
 
-func (i *baseInspector) addDependency(dependency string, meta *Metadata) {
-	meta.Dependencies.Add(dependency)
+// discoverDependencies inspects endpoints and extract kamelets
+// nolint: unparam
+func (i *baseInspector) discoverKamelets(source v1.SourceSpec, meta *Metadata) {
+	for _, uri := range meta.FromURIs {
+		AddKamelet(meta, uri)
+	}
+	for _, uri := range meta.ToURIs {
+		AddKamelet(meta, uri)
+	}
 }
 
-func (i *baseInspector) decodeComponent(uri string) (*v1.CamelArtifact, *v1.CamelScheme) {
-	uriSplit := strings.SplitN(uri, ":", 2)
-	if len(uriSplit) < 2 {
-		return nil, nil
-	}
-	uriStart := uriSplit[0]
-	scheme, ok := i.catalog.GetScheme(uriStart)
-	var schemeRef *v1.CamelScheme
-	if ok {
-		schemeRef = &scheme
-	}
-	return i.catalog.GetArtifactByScheme(uriStart), schemeRef
+func (i *baseInspector) addDependency(dependency string, meta *Metadata) {
+	meta.Dependencies.Add(dependency)
 }
 
 // hasOnlyPassiveEndpoints returns true if the source has no endpoint that needs to remain always active

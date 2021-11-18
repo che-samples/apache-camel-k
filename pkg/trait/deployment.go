@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
+	"github.com/apache/camel-k/pkg/util/label"
 )
 
 // The Deployment trait is responsible for generating the Kubernetes deployment that will make sure
@@ -33,6 +34,9 @@ import (
 // +camel-k:trait=deployment
 type deploymentTrait struct {
 	BaseTrait `property:",squash"`
+	// The maximum time in seconds for the deployment to make progress before it
+	// is considered to be failed. It defaults to 60s.
+	ProgressDeadlineSeconds *int32 `property:"progress-deadline-seconds" json:"progressDeadlineSeconds,omitempty"`
 }
 
 var _ ControllerStrategySelector = &deploymentTrait{}
@@ -44,7 +48,7 @@ func newDeploymentTrait() Trait {
 }
 
 func (t *deploymentTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		e.Integration.Status.SetCondition(
 			v1.IntegrationConditionDeploymentAvailable,
 			corev1.ConditionFalse,
@@ -55,7 +59,7 @@ func (t *deploymentTrait) Configure(e *Environment) (bool, error) {
 		return false, nil
 	}
 
-	if e.IntegrationInPhase(v1.IntegrationPhaseRunning) {
+	if e.IntegrationInPhase(v1.IntegrationPhaseRunning, v1.IntegrationPhaseError) {
 		condition := e.Integration.Status.GetCondition(v1.IntegrationConditionDeploymentAvailable)
 		return condition != nil && condition.Status == corev1.ConditionTrue, nil
 	}
@@ -86,7 +90,7 @@ func (t *deploymentTrait) Configure(e *Environment) (bool, error) {
 }
 
 func (t *deploymentTrait) SelectControllerStrategy(e *Environment) (*ControllerStrategy, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		return nil, nil
 	}
 	deploymentStrategy := ControllerStrategyDeployment
@@ -98,34 +102,15 @@ func (t *deploymentTrait) ControllerStrategySelectorOrder() int {
 }
 
 func (t *deploymentTrait) Apply(e *Environment) error {
-	if e.InPhase(v1.IntegrationKitPhaseReady, v1.IntegrationPhaseDeploying) ||
-		e.InPhase(v1.IntegrationKitPhaseReady, v1.IntegrationPhaseRunning) {
-		maps := e.computeConfigMaps()
-		deployment := t.getDeploymentFor(e)
+	deployment := t.getDeploymentFor(e)
+	e.Resources.Add(deployment)
 
-		e.Resources.AddAll(maps)
-		e.Resources.Add(deployment)
-
-		e.Integration.Status.SetCondition(
-			v1.IntegrationConditionDeploymentAvailable,
-			corev1.ConditionTrue,
-			v1.IntegrationConditionDeploymentAvailableReason,
-			fmt.Sprintf("deployment name is %s", deployment.Name),
-		)
-
-		if e.IntegrationInPhase(v1.IntegrationPhaseRunning) {
-			// Reconcile the deployment replicas
-			replicas := e.Integration.Spec.Replicas
-			// Deployment replicas defaults to 1, so we avoid forcing
-			// an update to nil that will result to another update cycle
-			// back to that default value by the Deployment controller.
-			if replicas == nil {
-				one := int32(1)
-				replicas = &one
-			}
-			deployment.Spec.Replicas = replicas
-		}
-	}
+	e.Integration.Status.SetCondition(
+		v1.IntegrationConditionDeploymentAvailable,
+		corev1.ConditionTrue,
+		v1.IntegrationConditionDeploymentAvailableReason,
+		fmt.Sprintf("deployment name is %s", deployment.Name),
+	)
 
 	return nil
 }
@@ -144,6 +129,11 @@ func (t *deploymentTrait) getDeploymentFor(e *Environment) *appsv1.Deployment {
 		}
 	}
 
+	deadline := int32(60)
+	if t.ProgressDeadlineSeconds != nil {
+		deadline = *t.ProgressDeadlineSeconds
+	}
+
 	deployment := appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Deployment",
@@ -158,7 +148,8 @@ func (t *deploymentTrait) getDeploymentFor(e *Environment) *appsv1.Deployment {
 			Annotations: annotations,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: e.Integration.Spec.Replicas,
+			ProgressDeadlineSeconds: &deadline,
+			Replicas:                e.Integration.Spec.Replicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					v1.IntegrationLabel: e.Integration.Name,
@@ -166,9 +157,7 @@ func (t *deploymentTrait) getDeploymentFor(e *Environment) *appsv1.Deployment {
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						v1.IntegrationLabel: e.Integration.Name,
-					},
+					Labels:      label.AddLabels(e.Integration.Name),
 					Annotations: annotations,
 				},
 				Spec: corev1.PodSpec{
@@ -177,6 +166,17 @@ func (t *deploymentTrait) getDeploymentFor(e *Environment) *appsv1.Deployment {
 			},
 		},
 	}
+
+	// Reconcile the deployment replicas
+	replicas := e.Integration.Spec.Replicas
+	// Deployment replicas defaults to 1, so we avoid forcing
+	// an update to nil that will result to another update cycle
+	// back to that default value by the Deployment controller.
+	if replicas == nil {
+		one := int32(1)
+		replicas = &one
+	}
+	deployment.Spec.Replicas = replicas
 
 	return &deployment
 }

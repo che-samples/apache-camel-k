@@ -19,25 +19,29 @@ package integration
 
 import (
 	"context"
+	"fmt"
+	"reflect"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	"k8s.io/api/batch/v1beta1"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	sb "github.com/redhat-developer/service-binding-operator/api/v1alpha1"
+	"knative.dev/serving/pkg/apis/serving"
+	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 	"github.com/apache/camel-k/pkg/client"
@@ -49,17 +53,14 @@ import (
 	"github.com/apache/camel-k/pkg/util/monitoring"
 )
 
-// Add creates a new Integration Controller and adds it to the Manager. The Manager will set fields on the Controller
-// and Start it when the Manager is Started.
 func Add(mgr manager.Manager) error {
 	c, err := client.FromManager(mgr)
 	if err != nil {
 		return err
 	}
-	return add(mgr, newReconciler(mgr, c), c)
+	return add(mgr, c, newReconciler(mgr, c))
 }
 
-// newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager, c client.Client) reconcile.Reconciler {
 	return monitoring.NewInstrumentedReconciler(
 		&reconcileIntegration{
@@ -75,62 +76,80 @@ func newReconciler(mgr manager.Manager, c client.Client) reconcile.Reconciler {
 	)
 }
 
-// add adds a new Controller to mgr with r as the reconcile.Reconciler
-func add(mgr manager.Manager, r reconcile.Reconciler, cl client.Client) error {
-	// Create a new controller
-	c, err := controller.New("integration-controller", mgr, controller.Options{Reconciler: r})
-	if err != nil {
-		return err
-	}
+func add(mgr manager.Manager, c client.Client, r reconcile.Reconciler) error {
+	b := builder.ControllerManagedBy(mgr).
+		Named("integration-controller").
+		// Watch for changes to primary resource Integration
+		For(&v1.Integration{}, builder.WithPredicates(
+			platform.FilteringFuncs{
+				UpdateFunc: func(e event.UpdateEvent) bool {
+					old, ok := e.ObjectOld.(*v1.Integration)
+					if !ok {
+						return false
+					}
+					it, ok := e.ObjectNew.(*v1.Integration)
+					if !ok {
+						return false
+					}
+					// Observe the time to first readiness metric
+					previous := old.Status.GetCondition(v1.IntegrationConditionReady)
+					if next := it.Status.GetCondition(v1.IntegrationConditionReady); (previous == nil || previous.Status != corev1.ConditionTrue && (previous.FirstTruthyTime == nil || previous.FirstTruthyTime.IsZero())) &&
+						next != nil && next.Status == corev1.ConditionTrue && next.FirstTruthyTime != nil && !next.FirstTruthyTime.IsZero() &&
+						it.Status.InitializationTimestamp != nil {
+						duration := next.FirstTruthyTime.Time.Sub(it.Status.InitializationTimestamp.Time)
+						Log.WithValues("request-namespace", it.Namespace, "request-name", it.Name).
+							ForIntegration(it).Infof("First readiness after %s", duration)
+						timeToFirstReadiness.Observe(duration.Seconds())
+					}
+					// Ignore updates to the integration status in which case metadata.Generation does not change,
+					// or except when the integration phase changes as it's used to transition from one phase
+					// to another.
+					return old.Generation != it.Generation ||
+						old.Status.Phase != it.Status.Phase
+				},
+				DeleteFunc: func(e event.DeleteEvent) bool {
+					// Evaluates to false if the object has been confirmed deleted
+					return !e.DeleteStateUnknown
+				},
+			})).
+		// Watch for IntegrationKit phase transitioning to ready or error, and
+		// enqueue requests for any integration that matches the kit, in building
+		// or running phase.
+		Watches(&source.Kind{Type: &v1.IntegrationKit{}},
+			handler.EnqueueRequestsFromMapFunc(func(a ctrl.Object) []reconcile.Request {
+				var requests []reconcile.Request
+				kit, ok := a.(*v1.IntegrationKit)
+				if !ok {
+					log.Error(fmt.Errorf("type assertion failed: %v", a), "Failed to retrieve integration list")
+					return requests
+				}
 
-	// Watch for changes to primary resource Integration
-	err = c.Watch(&source.Kind{Type: &v1.Integration{}},
-		&handler.EnqueueRequestForObject{},
-		predicate.Funcs{
-			UpdateFunc: func(e event.UpdateEvent) bool {
-				oldIntegration := e.ObjectOld.(*v1.Integration)
-				newIntegration := e.ObjectNew.(*v1.Integration)
-				// Ignore updates to the integration status in which case metadata.Generation does not change,
-				// or except when the integration phase changes as it's used to transition from one phase
-				// to another
-				return oldIntegration.Generation != newIntegration.Generation ||
-					oldIntegration.Status.Phase != newIntegration.Status.Phase
-			},
-			DeleteFunc: func(e event.DeleteEvent) bool {
-				// Evaluates to false if the object has been confirmed deleted
-				return !e.DeleteStateUnknown
-			},
-		},
-	)
-	if err != nil {
-		return err
-	}
+				if kit.Status.Phase != v1.IntegrationKitPhaseReady && kit.Status.Phase != v1.IntegrationKitPhaseError {
+					return requests
+				}
 
-	// Watch for IntegrationKit phase transitioning to ready or error and
-	// enqueue requests for any integrations that are in phase waiting for
-	// kit
-	err = c.Watch(&source.Kind{Type: &v1.IntegrationKit{}},
-		handler.EnqueueRequestsFromMapFunc(func(a ctrl.Object) []reconcile.Request {
-			kit := a.(*v1.IntegrationKit)
-			var requests []reconcile.Request
-
-			if kit.Status.Phase == v1.IntegrationKitPhaseReady || kit.Status.Phase == v1.IntegrationKitPhaseError {
 				list := &v1.IntegrationList{}
-
 				// Do global search in case of global operator (it may be using a global platform)
 				var opts []ctrl.ListOption
 				if !platform.IsCurrentOperatorGlobal() {
 					opts = append(opts, ctrl.InNamespace(kit.Namespace))
 				}
-
-				if err := mgr.GetClient().List(context.TODO(), list, opts...); err != nil {
+				if err := c.List(context.Background(), list, opts...); err != nil {
 					log.Error(err, "Failed to retrieve integration list")
 					return requests
 				}
 
 				for _, integration := range list.Items {
-					if integration.Status.Phase == v1.IntegrationPhaseBuildingKit {
-						log.Infof("Kit %s ready, wake-up integration: %s", kit.Name, integration.Name)
+					if match, err := integrationMatches(&integration, kit); err != nil {
+						log.Errorf(err, "Error matching integration %q with kit %q", integration.Name, kit.Name)
+
+						continue
+					} else if !match {
+						continue
+					}
+					if integration.Status.Phase == v1.IntegrationPhaseBuildingKit ||
+						integration.Status.Phase == v1.IntegrationPhaseRunning {
+						log.Infof("Kit %s ready, notify integration: %s", kit.Name, integration.Name)
 						requests = append(requests, reconcile.Request{
 							NamespacedName: types.NamespacedName{
 								Namespace: integration.Namespace,
@@ -140,128 +159,90 @@ func add(mgr manager.Manager, r reconcile.Reconciler, cl client.Client) error {
 					}
 				}
 
-			}
-
-			return requests
-		}),
-	)
-	if err != nil {
-		return err
-	}
-
-	// Watch for IntegrationPlatform phase transitioning to ready and enqueue
-	// requests for any integrations that are in phase waiting for platform
-	err = c.Watch(&source.Kind{Type: &v1.IntegrationPlatform{}},
-		handler.EnqueueRequestsFromMapFunc(func(a ctrl.Object) []reconcile.Request {
-			p := a.(*v1.IntegrationPlatform)
-			var requests []reconcile.Request
-
-			if p.Status.Phase == v1.IntegrationPlatformPhaseReady {
-				list := &v1.IntegrationList{}
-
-				// Do global search in case of global operator (it may be using a global platform)
-				var opts []ctrl.ListOption
-				if !platform.IsCurrentOperatorGlobal() {
-					opts = append(opts, ctrl.InNamespace(p.Namespace))
-				}
-
-				if err := mgr.GetClient().List(context.TODO(), list, opts...); err != nil {
-					log.Error(err, "Failed to list integrations")
+				return requests
+			})).
+		// Watch for IntegrationPlatform phase transitioning to ready and enqueue
+		// requests for any integrations that are in phase waiting for platform
+		Watches(&source.Kind{Type: &v1.IntegrationPlatform{}},
+			handler.EnqueueRequestsFromMapFunc(func(a ctrl.Object) []reconcile.Request {
+				var requests []reconcile.Request
+				p, ok := a.(*v1.IntegrationPlatform)
+				if !ok {
+					log.Error(fmt.Errorf("type assertion failed: %v", a), "Failed to list integrations")
 					return requests
 				}
 
-				for _, integration := range list.Items {
-					if integration.Status.Phase == v1.IntegrationPhaseWaitingForPlatform {
-						log.Infof("Platform %s ready, wake-up integration: %s", p.Name, integration.Name)
-						requests = append(requests, reconcile.Request{
-							NamespacedName: types.NamespacedName{
-								Namespace: integration.Namespace,
-								Name:      integration.Name,
-							},
-						})
+				if p.Status.Phase == v1.IntegrationPlatformPhaseReady {
+					list := &v1.IntegrationList{}
+
+					// Do global search in case of global operator (it may be using a global platform)
+					var opts []ctrl.ListOption
+					if !platform.IsCurrentOperatorGlobal() {
+						opts = append(opts, ctrl.InNamespace(p.Namespace))
+					}
+
+					if err := c.List(context.Background(), list, opts...); err != nil {
+						log.Error(err, "Failed to list integrations")
+						return requests
+					}
+
+					for _, integration := range list.Items {
+						if integration.Status.Phase == v1.IntegrationPhaseWaitingForPlatform {
+							log.Infof("Platform %s ready, wake-up integration: %s", p.Name, integration.Name)
+							requests = append(requests, reconcile.Request{
+								NamespacedName: types.NamespacedName{
+									Namespace: integration.Namespace,
+									Name:      integration.Name,
+								},
+							})
+						}
 					}
 				}
-			}
 
-			return requests
-		}),
-	)
-	if err != nil {
-		return err
-	}
-
-	// Watch for ReplicaSet to reconcile replicas to the integration status. We cannot use
-	// the EnqueueRequestForOwner handler as the owner depends on the deployment strategy,
-	// either regular deployment or Knative service. In any case, the integration is not the
-	// direct owner of the ReplicaSet.
-	err = c.Watch(&source.Kind{Type: &appsv1.ReplicaSet{}},
-		handler.EnqueueRequestsFromMapFunc(func(a ctrl.Object) []reconcile.Request {
-			rs := a.(*appsv1.ReplicaSet)
-			var requests []reconcile.Request
-
-			labels := rs.GetLabels()
-			integrationName, ok := labels[v1.IntegrationLabel]
-			if ok {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Namespace: rs.Namespace,
-						Name:      integrationName,
+				return requests
+			})).
+		// Watch for the owned Deployments
+		Owns(&appsv1.Deployment{}).
+		// Watch for the owned CronJobs
+		Owns(&batchv1beta1.CronJob{}).
+		// Watch for the Integration Pods
+		Watches(&source.Kind{Type: &corev1.Pod{}},
+			handler.EnqueueRequestsFromMapFunc(func(a ctrl.Object) []reconcile.Request {
+				pod, ok := a.(*corev1.Pod)
+				if !ok {
+					log.Error(fmt.Errorf("type assertion failed: %v", a), "Failed to list integration pods")
+					return []reconcile.Request{}
+				}
+				return []reconcile.Request{
+					{
+						NamespacedName: types.NamespacedName{
+							Namespace: pod.GetNamespace(),
+							Name:      pod.Labels[v1.IntegrationLabel],
+						},
 					},
-				})
-			}
+				}
+			}))
 
-			return requests
-		}),
-		predicate.Funcs{
-			UpdateFunc: func(e event.UpdateEvent) bool {
-				oldReplicaSet := e.ObjectOld.(*appsv1.ReplicaSet)
-				newReplicaSet := e.ObjectNew.(*appsv1.ReplicaSet)
-				// Ignore updates to the ReplicaSet other than the replicas ones,
-				// that are used to reconcile the integration replicas.
-				return oldReplicaSet.Status.Replicas != newReplicaSet.Status.Replicas ||
-					oldReplicaSet.Status.ReadyReplicas != newReplicaSet.Status.ReadyReplicas ||
-					oldReplicaSet.Status.AvailableReplicas != newReplicaSet.Status.AvailableReplicas
-			},
-		},
-	)
-	if err != nil {
+	// Watch for the owned Knative Services conditionally
+	if ok, err := kubernetes.IsAPIResourceInstalled(c, servingv1.SchemeGroupVersion.String(), reflect.TypeOf(servingv1.Service{}).Name()); err != nil {
 		return err
-	}
-
-	// Watch cronjob to update the ready condition
-	err = c.Watch(&source.Kind{Type: &v1beta1.CronJob{}}, &handler.EnqueueRequestForOwner{
-		OwnerType:    &v1.Integration{},
-		IsController: false,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Check the ServiceBinding CRD is present
-	if ok, err := kubernetes.IsAPIResourceInstalled(cl, sb.GroupVersion.String(), sb.GroupVersionKind.Kind); err != nil {
-		return err
-	} else if !ok {
-		log.Info("Service binding is disabled, install the Service Binding Operator if needed")
-	} else if ok, err := kubernetes.CheckPermission(context.TODO(), cl, sb.GroupVersion.Group, sb.GroupVersionResource.Resource, platform.GetOperatorWatchNamespace(), "", "create"); err != nil {
-		return err
-	} else if !ok {
-		log.Info("Service binding is disabled, the operator is not granted permission to create ServiceBindings!")
-	} else {
-		// Watch ServiceBindings and enqueue owning Integrations
-		err = c.Watch(&source.Kind{Type: &sb.ServiceBinding{}}, &handler.EnqueueRequestForOwner{
-			OwnerType:    &v1.Integration{},
-			IsController: true,
-		})
-		if err != nil {
+	} else if ok {
+		// Check for permission to watch the ConsoleCLIDownload resource
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if ok, err = kubernetes.CheckPermission(ctx, c, serving.GroupName, "services", platform.GetOperatorWatchNamespace(), "", "watch"); err != nil {
 			return err
+		} else if ok {
+			b.Owns(&servingv1.Service{})
 		}
 	}
-	return nil
+
+	return b.Complete(r)
 }
 
 var _ reconcile.Reconciler = &reconcileIntegration{}
 
-// reconcileIntegration reconciles a Integration object
+// reconcileIntegration reconciles an Integration object
 type reconcileIntegration struct {
 	// This client, initialized using mgr.Client() above, is a split client
 	// that reads objects from the cache and writes to the API server
@@ -301,18 +282,20 @@ func (r *reconcileIntegration) Reconcile(ctx context.Context, request reconcile.
 		return reconcile.Result{}, err
 	}
 
+	// Only process resources assigned to the operator
+	if !platform.IsOperatorHandler(&instance) {
+		rlog.Info("Ignoring request because resource is not assigned to current operator")
+		return reconcile.Result{}, nil
+	}
+
 	target := instance.DeepCopy()
 	targetLog := rlog.ForIntegration(target)
 
 	actions := []Action{
-		NewWaitForBindingsAction(),
 		NewPlatformSetupAction(),
 		NewInitializeAction(),
-		NewBuildKitAction(),
-		NewDeployAction(),
+		newBuildKitAction(),
 		NewMonitorAction(),
-		NewErrorAction(),
-		NewNoopAction(),
 	}
 
 	for _, a := range actions {

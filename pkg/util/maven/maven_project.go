@@ -21,6 +21,8 @@ import (
 	"bytes"
 	"encoding/xml"
 	"strings"
+
+	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 )
 
 func NewProject() Project {
@@ -44,6 +46,13 @@ func NewProjectWithGAV(group string, artifact string, version string) Project {
 	return p
 }
 
+func (p Project) Command(context Context) *Command {
+	return &Command{
+		context: context,
+		project: p,
+	}
+}
+
 func (p Project) MarshalBytes() ([]byte, error) {
 	w := &bytes.Buffer{}
 	w.WriteString(xml.Header)
@@ -51,8 +60,7 @@ func (p Project) MarshalBytes() ([]byte, error) {
 	e := xml.NewEncoder(w)
 	e.Indent("", "  ")
 
-	err := e.Encode(p)
-	if err != nil {
+	if err := e.Encode(p); err != nil {
 		return []byte{}, err
 	}
 
@@ -100,12 +108,12 @@ func (p *Project) AddDependencies(deps ...Dependency) {
 	}
 }
 
-// AddDependencyGAV a dependency to maven's dependencies
+// AddDependencyGAV adds a dependency to maven's dependencies
 func (p *Project) AddDependencyGAV(groupID string, artifactID string, version string) {
 	p.AddDependency(NewDependency(groupID, artifactID, version))
 }
 
-// AddEncodedDependencyGAV a dependency to maven's dependencies
+// AddEncodedDependencyGAV adds a dependency in GAV format to maven's dependencies
 func (p *Project) AddEncodedDependencyGAV(gav string) {
 	if d, err := ParseGAV(gav); err == nil {
 		// TODO: error handling
@@ -136,7 +144,44 @@ func (p *Project) AddDependencyExclusions(dep Dependency, exclusions ...Exclusio
 	}
 }
 
-// NewDependency create an new dependency from the given gav info
+func (p *Project) AddEncodedDependencyExclusion(gav string, exclusion Exclusion) {
+	if d, err := ParseGAV(gav); err == nil {
+		// TODO: error handling
+		p.AddDependencyExclusion(d, exclusion)
+	}
+}
+
+type propertiesEntry struct {
+	XMLName xml.Name
+	Value   string `xml:",chardata"`
+}
+
+func (m Properties) AddAll(properties map[string]string) {
+	for k, v := range properties {
+		m[k] = v
+	}
+}
+
+func (m Properties) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	if len(m) == 0 {
+		return nil
+	}
+
+	err := e.EncodeToken(start)
+	if err != nil {
+		return err
+	}
+
+	for k, v := range m {
+		if err := e.Encode(propertiesEntry{XMLName: xml.Name{Local: k}, Value: v}); err != nil {
+			return err
+		}
+	}
+
+	return e.EncodeToken(start.End())
+}
+
+// NewDependency creates an new dependency from the given GAV
 func NewDependency(groupID string, artifactID string, version string) Dependency {
 	return Dependency{
 		GroupID:    groupID,
@@ -147,24 +192,22 @@ func NewDependency(groupID string, artifactID string, version string) Dependency
 	}
 }
 
+// NewRepository parses the given repository URL and generates the corresponding v1.Repository.
 //
-// NewRepository parse the given repo url ang generated the related struct.
-//
-// The repository can be customized by appending @instruction to the repository
-// uri, as example:
+// The repository can be customized by appending @param to the repository
+// URL, e.g.:
 //
 //     http://my-nexus:8081/repository/publicc@id=my-repo@snapshots
 //
-// Will enable snapshots and sets the repo it to my-repo
-//
-func NewRepository(repo string) Repository {
-	r := Repository{
+// That enables snapshots and sets the repository id to `my-repo`
+func NewRepository(repo string) v1.Repository {
+	r := v1.Repository{
 		URL: repo,
-		Releases: RepositoryPolicy{
+		Releases: v1.RepositoryPolicy{
 			Enabled:        true,
 			ChecksumPolicy: "fail",
 		},
-		Snapshots: RepositoryPolicy{
+		Snapshots: v1.RepositoryPolicy{
 			Enabled:        false,
 			ChecksumPolicy: "fail",
 		},

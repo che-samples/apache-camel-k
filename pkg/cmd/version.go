@@ -20,8 +20,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Masterminds/semver"
+	"github.com/fatih/camelcase"
 	"github.com/spf13/cobra"
 
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,6 +35,10 @@ import (
 
 // VersionVariant may be overridden at build time
 var VersionVariant = ""
+
+const (
+	infoVersion = "Version"
+)
 
 func newCmdVersion(rootCmdOptions *RootCmdOptions) (*cobra.Command, *versionCmdOptions) {
 	options := versionCmdOptions{
@@ -50,6 +56,8 @@ func newCmdVersion(rootCmdOptions *RootCmdOptions) (*cobra.Command, *versionCmdO
 	}
 
 	cmd.Flags().Bool("operator", false, "Display Operator version")
+	cmd.Flags().BoolP("verbose", "v", false, "Display all available extra information")
+	cmd.Flags().BoolP("all", "a", false, "Display both Client and Operator version")
 
 	return &cmd, &options
 }
@@ -57,62 +65,110 @@ func newCmdVersion(rootCmdOptions *RootCmdOptions) (*cobra.Command, *versionCmdO
 type versionCmdOptions struct {
 	*RootCmdOptions
 	Operator bool `mapstructure:"operator"`
+	Verbose  bool `mapstructure:"verbose"`
+	All      bool `mapstructure:"all"`
 }
 
 func (o *versionCmdOptions) preRunE(cmd *cobra.Command, args []string) error {
-	if !o.Operator {
+	if !o.Operator && !o.All {
 		// let the command to work in offline mode
 		cmd.Annotations[offlineCommandLabel] = "true"
 	}
 	return o.RootCmdOptions.preRun(cmd, args)
 }
 
-func (o *versionCmdOptions) run(_ *cobra.Command, _ []string) error {
-	if o.Operator {
+func (o *versionCmdOptions) run(cmd *cobra.Command, _ []string) error {
+	if o.All || !o.Operator {
+		o.displayClientVersion(cmd)
+	}
+	if o.All {
+		// breaking line
+		fmt.Fprintln(cmd.OutOrStdout(), "")
+	}
+	if o.All || o.Operator {
 		c, err := o.GetCmdClient()
 		if err != nil {
 			return err
 		}
-		displayOperatorVersion(o.Context, c, o.Namespace)
-	} else {
-		displayClientVersion()
+		o.displayOperatorVersion(cmd, c)
 	}
 	return nil
 }
 
-func displayClientVersion() {
+func (o *versionCmdOptions) displayClientVersion(cmd *cobra.Command) {
 	if VersionVariant != "" {
-		fmt.Printf("Camel K Client %s %s\n", VersionVariant, defaults.Version)
+		fmt.Fprintf(cmd.OutOrStdout(), "Camel K Client %s %s\n", VersionVariant, defaults.Version)
 	} else {
-		fmt.Printf("Camel K Client %s\n", defaults.Version)
+		fmt.Fprintf(cmd.OutOrStdout(), "Camel K Client %s\n", defaults.Version)
+	}
+	if o.Verbose {
+		fmt.Fprintf(cmd.OutOrStdout(), "Git Commit: %s\n", defaults.GitCommit)
 	}
 }
 
-func displayOperatorVersion(ctx context.Context, c client.Client, namespace string) {
-	operatorVersion, err := operatorVersion(ctx, c, namespace)
+func (o *versionCmdOptions) displayOperatorVersion(cmd *cobra.Command, c client.Client) {
+	operatorInfo, err := operatorInfo(o.Context, c, o.Namespace)
 	if err != nil {
-		fmt.Printf("Unable to retrieve operator version: %s\n", err)
+		fmt.Fprintf(cmd.OutOrStdout(), "Unable to retrieve operator version: %s\n", err)
 	} else {
-		if operatorVersion == "" {
-		  fmt.Printf("Unable to retrieve operator version: The IntegrationPlatform resource hasn't been reconciled yet!")
+		if operatorInfo[infoVersion] == "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Unable to retrieve operator version: The IntegrationPlatform resource hasn't been reconciled yet!")
 		} else {
-		  fmt.Printf("Camel K Operator %s\n", operatorVersion)
+			fmt.Fprintf(cmd.OutOrStdout(), "Camel K Operator %s\n", operatorInfo[infoVersion])
+
+			if o.Verbose {
+				for k, v := range operatorInfo {
+					if k != infoVersion {
+						fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", k, v)
+					}
+				}
+			}
 		}
 	}
 }
 
-func operatorVersion(ctx context.Context, c client.Client, namespace string) (string, error) {
+func operatorInfo(ctx context.Context, c client.Client, namespace string) (map[string]string, error) {
+	infos := make(map[string]string)
+
 	platform := v1.NewIntegrationPlatform(namespace, "camel-k")
 	platformKey := k8sclient.ObjectKey{
 		Namespace: namespace,
 		Name:      "camel-k",
 	}
 
-	if err := c.Get(ctx, platformKey, &platform); err == nil {
-		return platform.Status.Version, nil
-	} else {
+	if err := c.Get(ctx, platformKey, &platform); err != nil {
+		return nil, err
+	}
+	// Useful information
+	infos["version"] = platform.Status.Version
+	infos["publishStrategy"] = string(platform.Status.Build.PublishStrategy)
+	infos["runtimeVersion"] = platform.Status.Build.RuntimeVersion
+
+	if platform.Status.Info != nil {
+		for k, v := range platform.Status.Info {
+			infos[k] = v
+		}
+	}
+
+	return fromCamelCase(infos), nil
+}
+
+func fromCamelCase(infos map[string]string) map[string]string {
+	textKeys := make(map[string]string)
+	for k, v := range infos {
+		key := strings.Title(strings.Join(camelcase.Split(k), " "))
+		textKeys[key] = v
+	}
+
+	return textKeys
+}
+
+func operatorVersion(ctx context.Context, c client.Client, namespace string) (string, error) {
+	infos, err := operatorInfo(ctx, c, namespace)
+	if err != nil {
 		return "", err
 	}
+	return infos[infoVersion], nil
 }
 
 func compatibleVersions(aVersion, bVersion string) bool {

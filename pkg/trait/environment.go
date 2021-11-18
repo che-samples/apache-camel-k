@@ -18,10 +18,9 @@ limitations under the License.
 package trait
 
 import (
-	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
-	"github.com/apache/camel-k/pkg/util"
 	"github.com/apache/camel-k/pkg/util/defaults"
 	"github.com/apache/camel-k/pkg/util/envvar"
+	"github.com/apache/camel-k/pkg/util/property"
 )
 
 // The environment trait is used internally to inject standard environment variables in the integration container,
@@ -32,6 +31,8 @@ type environmentTrait struct {
 	BaseTrait `property:",squash"`
 	// Enables injection of `NAMESPACE` and `POD_NAME` environment variables (default `true`)
 	ContainerMeta *bool `property:"container-meta" json:"containerMeta,omitempty"`
+	// A list of variables to be created on the Pod. Must have KEY=VALUE syntax (ie, MY_VAR="my value").
+	Vars []string `property:"vars" json:"vars,omitempty"`
 }
 
 const (
@@ -54,13 +55,13 @@ const (
 func newEnvironmentTrait() Trait {
 	return &environmentTrait{
 		BaseTrait:     NewBaseTrait("environment", 800),
-		ContainerMeta: util.BoolP(true),
+		ContainerMeta: BoolP(true),
 	}
 }
 
 func (t *environmentTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled == nil || *t.Enabled {
-		return e.IntegrationInPhase(v1.IntegrationPhaseDeploying, v1.IntegrationPhaseRunning), nil
+	if IsNilOrTrue(t.Enabled) {
+		return e.IntegrationInRunningPhases(), nil
 	}
 
 	return false, nil
@@ -72,12 +73,19 @@ func (t *environmentTrait) Apply(e *Environment) error {
 		envvar.SetVal(&e.EnvVars, envVarCamelKIntegration, e.Integration.Name)
 	}
 	envvar.SetVal(&e.EnvVars, envVarCamelKRuntimeVersion, e.RuntimeVersion)
-	envvar.SetVal(&e.EnvVars, envVarMountPathConfigMaps, configMapsMountPath)
-	envvar.SetVal(&e.EnvVars, envVarMountPathSecrets, secretsMountPath)
+	envvar.SetVal(&e.EnvVars, envVarMountPathConfigMaps, configConfigmapsMountPath)
+	envvar.SetVal(&e.EnvVars, envVarMountPathSecrets, configSecretsMountPath)
 
-	if util.IsNilOrTrue(t.ContainerMeta) {
+	if IsNilOrTrue(t.ContainerMeta) {
 		envvar.SetValFrom(&e.EnvVars, envVarNamespace, "metadata.namespace")
 		envvar.SetValFrom(&e.EnvVars, envVarPodName, "metadata.name")
+	}
+
+	if t.Vars != nil {
+		for _, env := range t.Vars {
+			k, v := property.SplitPropertyFileEntry(env)
+			envvar.SetVal(&e.EnvVars, k, v)
+		}
 	}
 
 	return nil

@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 // To enable compilation of this file in Goland, go to "Settings -> Go -> Vendoring & Build Tags -> Custom Tags" and add "integration"
@@ -50,13 +51,13 @@ func TestMetrics(t *testing.T) {
 			"-t", "prometheus.enabled=true",
 			"-t", "prometheus.pod-monitor=false").Execute()).To(Succeed())
 		Eventually(IntegrationPodPhase(ns, name), TestTimeoutMedium).Should(Equal(corev1.PodRunning))
-		Eventually(IntegrationCondition(ns, name, v1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(corev1.ConditionTrue))
+		Eventually(IntegrationConditionStatus(ns, name, v1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(corev1.ConditionTrue))
 		Eventually(IntegrationLogs(ns, "java"), TestTimeoutShort).Should(ContainSubstring("Magicstring!"))
 
 		pod := OperatorPod(ns)()
 		Expect(pod).NotTo(BeNil())
 
-		logs := StructuredLogs(ns, pod.Name, corev1.PodLogOptions{})
+		logs := StructuredLogs(ns, pod.Name, corev1.PodLogOptions{}, false)
 		Expect(logs).NotTo(BeEmpty())
 
 		response, err := TestClient().CoreV1().RESTClient().Get().
@@ -71,6 +72,7 @@ func TestMetrics(t *testing.T) {
 		Expect(build).NotTo(BeNil())
 
 		t.Run("Build duration metric", func(t *testing.T) {
+			RegisterTestingT(t)
 			// Get the duration from the Build status
 			duration, err := time.ParseDuration(build.Status.Duration)
 			Expect(err).To(BeNil())
@@ -80,13 +82,9 @@ func TestMetrics(t *testing.T) {
 			err = NewLogWalker(&logs).
 				AddStep(MatchFields(IgnoreExtras, Fields{
 					"LoggerName":  Equal("camel-k.controller.build"),
-					"Message":     Equal("Build state transition"),
-					"Phase":       Equal(string(v1.BuildPhasePending)),
-					"RequestName": Equal(build.Name),
-				}), LogEntryNoop).
-				AddStep(MatchFields(IgnoreExtras, Fields{
-					"LoggerName":  Equal("camel-k.controller.build"),
-					"Message":     Equal("Reconciling Build"),
+					"Message":     Equal("state transition"),
+					"PhaseFrom":   Equal(string(v1.BuildPhaseScheduling)),
+					"PhaseTo":     Equal(string(v1.BuildPhasePending)),
 					"RequestName": Equal(build.Name),
 				}), func(l *LogEntry) { ts1 = l.Timestamp.Time }).
 				AddStep(MatchFields(IgnoreExtras, Fields{
@@ -95,7 +93,9 @@ func TestMetrics(t *testing.T) {
 				}), LogEntryNoop).
 				AddStep(MatchFields(IgnoreExtras, Fields{
 					"LoggerName":  Equal("camel-k.controller.build"),
-					"Message":     Equal("Reconciling Build"),
+					"Message":     Equal("state transition"),
+					"PhaseFrom":   Equal(string(v1.BuildPhaseRunning)),
+					"PhaseTo":     Equal(string(v1.BuildPhaseSucceeded)),
 					"RequestName": Equal(build.Name),
 				}), func(l *LogEntry) { ts2 = l.Timestamp.Time }).
 				Walk()
@@ -108,8 +108,9 @@ func TestMetrics(t *testing.T) {
 			Expect(math.Abs((durationFromLogs - duration).Seconds())).To(BeNumerically("<", 1))
 
 			// Check the duration is observed in the corresponding metric
-			Expect(metrics).To(HaveKeyWithValue("camel_k_build_duration_seconds",
-				EqualP(prometheus.MetricFamily{
+			Expect(metrics).To(HaveKey("camel_k_build_duration_seconds"))
+			Expect(metrics["camel_k_build_duration_seconds"]).To(EqualP(
+				prometheus.MetricFamily{
 					Name: stringP("camel_k_build_duration_seconds"),
 					Help: stringP("Camel K build duration"),
 					Type: metricTypeP(prometheus.MetricType_HISTOGRAM),
@@ -117,6 +118,7 @@ func TestMetrics(t *testing.T) {
 						{
 							Label: []*prometheus.LabelPair{
 								label("result", "Succeeded"),
+								label("type", "fast-jar"),
 							},
 							Histogram: &prometheus.Histogram{
 								SampleCount: uint64P(1),
@@ -125,11 +127,12 @@ func TestMetrics(t *testing.T) {
 							},
 						},
 					},
-				}),
+				},
 			))
 		})
 
 		t.Run("Build recovery attempts metric", func(t *testing.T) {
+			RegisterTestingT(t)
 			// Check there are no failures reported in the Build status
 			Expect(build.Status.Failure).To(BeNil())
 
@@ -144,8 +147,9 @@ func TestMetrics(t *testing.T) {
 			Expect(recoveryAttempts).To(BeNumerically("==", 0))
 
 			// Check no recovery attempts are observed in the corresponding metric
-			Expect(metrics).To(HaveKeyWithValue("camel_k_build_recovery_attempts",
-				EqualP(prometheus.MetricFamily{
+			Expect(metrics).To(HaveKey("camel_k_build_recovery_attempts"))
+			Expect(metrics["camel_k_build_recovery_attempts"]).To(EqualP(
+				prometheus.MetricFamily{
 					Name: stringP("camel_k_build_recovery_attempts"),
 					Help: stringP("Camel K build recovery attempts"),
 					Type: metricTypeP(prometheus.MetricType_HISTOGRAM),
@@ -153,6 +157,7 @@ func TestMetrics(t *testing.T) {
 						{
 							Label: []*prometheus.LabelPair{
 								label("result", "Succeeded"),
+								label("type", "fast-jar"),
 							},
 							Histogram: &prometheus.Histogram{
 								SampleCount: uint64P(1),
@@ -161,18 +166,20 @@ func TestMetrics(t *testing.T) {
 							},
 						},
 					},
-				}),
+				},
 			))
 		})
 
 		t.Run("reconciliation duration metric", func(t *testing.T) {
-			Expect(metrics).To(HaveKeyWithValue("camel_k_reconciliation_duration_seconds",
-				PointTo(MatchFields(IgnoreExtras, Fields{
+			RegisterTestingT(t)
+			Expect(metrics).To(HaveKey("camel_k_reconciliation_duration_seconds"))
+			Expect(metrics["camel_k_reconciliation_duration_seconds"]).To(PointTo(MatchFields(IgnoreExtras,
+				Fields{
 					"Name": EqualP("camel_k_reconciliation_duration_seconds"),
 					"Help": EqualP("Camel K reconciliation loop duration"),
 					"Type": EqualP(prometheus.MetricType_HISTOGRAM),
-				})),
-			))
+				},
+			)))
 
 			counter := NewLogCounter(&logs)
 
@@ -217,7 +224,23 @@ func TestMetrics(t *testing.T) {
 				platformRequeuedCount = *platformRequeued.Histogram.SampleCount
 			}
 
-			Expect(platformReconciliations).To(BeNumerically("==", platformReconciledCount+platformRequeuedCount))
+			platformErrored := getMetric(metrics["camel_k_reconciliation_duration_seconds"],
+				MatchFieldsP(IgnoreExtras, Fields{
+					"Label": ConsistOf(
+						label("group", v1.SchemeGroupVersion.Group),
+						label("version", v1.SchemeGroupVersion.Version),
+						label("kind", "IntegrationPlatform"),
+						label("namespace", ns),
+						label("result", "Errored"),
+						label("tag", "PlatformError"),
+					),
+				}))
+			platformErroredCount := uint64(0)
+			if platformErrored != nil {
+				platformErroredCount = *platformErrored.Histogram.SampleCount
+			}
+
+			Expect(platformReconciliations).To(BeNumerically("==", platformReconciledCount+platformRequeuedCount+platformErroredCount))
 
 			// Count the number of Integration reconciliations
 			integrationReconciliations, err := counter.Count(MatchFields(IgnoreExtras, Fields{
@@ -230,8 +253,8 @@ func TestMetrics(t *testing.T) {
 			Expect(integrationReconciliations).To(BeNumerically(">", 0))
 
 			// Check it matches the observation in the corresponding metric
-			Expect(metrics).To(HaveKeyWithValue("camel_k_reconciliation_duration_seconds",
-				PointTo(MatchFields(IgnoreExtras, Fields{
+			Expect(metrics["camel_k_reconciliation_duration_seconds"]).To(PointTo(MatchFields(IgnoreExtras,
+				Fields{
 					"Name": EqualP("camel_k_reconciliation_duration_seconds"),
 					"Help": EqualP("Camel K reconciliation loop duration"),
 					"Type": EqualP(prometheus.MetricType_HISTOGRAM),
@@ -248,8 +271,8 @@ func TestMetrics(t *testing.T) {
 							"SampleCount": EqualP(uint64(integrationReconciliations)),
 						}),
 					})),
-				})),
-			))
+				},
+			)))
 
 			// Count the number of IntegrationKit reconciliations
 			integrationKitReconciliations, err := counter.Count(MatchFields(IgnoreExtras, Fields{
@@ -262,8 +285,8 @@ func TestMetrics(t *testing.T) {
 			Expect(integrationKitReconciliations).To(BeNumerically(">", 0))
 
 			// Check it matches the observation in the corresponding metric
-			Expect(metrics).To(HaveKeyWithValue("camel_k_reconciliation_duration_seconds",
-				PointTo(MatchFields(IgnoreExtras, Fields{
+			Expect(metrics["camel_k_reconciliation_duration_seconds"]).To(PointTo(MatchFields(IgnoreExtras,
+				Fields{
 					"Name": EqualP("camel_k_reconciliation_duration_seconds"),
 					"Help": EqualP("Camel K reconciliation loop duration"),
 					"Type": EqualP(prometheus.MetricType_HISTOGRAM),
@@ -280,8 +303,8 @@ func TestMetrics(t *testing.T) {
 							"SampleCount": EqualP(uint64(integrationKitReconciliations)),
 						}),
 					})),
-				})),
-			))
+				},
+			)))
 
 			// Count the number of Build reconciliations
 			buildReconciliations, err := counter.Count(MatchFields(IgnoreExtras, Fields{
@@ -328,6 +351,7 @@ func TestMetrics(t *testing.T) {
 		})
 
 		t.Run("Build queue duration metric", func(t *testing.T) {
+			RegisterTestingT(t)
 			var ts1, ts2 time.Time
 			// The start queuing time is taken from the creation time
 			ts1 = build.CreationTimestamp.Time
@@ -336,8 +360,9 @@ func TestMetrics(t *testing.T) {
 			err = NewLogWalker(&logs).
 				AddStep(MatchFields(IgnoreExtras, Fields{
 					"LoggerName":  Equal("camel-k.controller.build"),
-					"Message":     Equal("Build state transition"),
-					"Phase":       Equal(string(v1.BuildPhasePending)),
+					"Message":     Equal("state transition"),
+					"PhaseFrom":   Equal(string(v1.BuildPhaseScheduling)),
+					"PhaseTo":     Equal(string(v1.BuildPhasePending)),
 					"RequestName": Equal(build.Name),
 				}), func(l *LogEntry) { ts2 = l.Timestamp.Time }).
 				Walk()
@@ -361,13 +386,16 @@ func TestMetrics(t *testing.T) {
 			Expect(math.Abs(durationFromLogs.Seconds() - duration)).To(BeNumerically("<", 1))
 
 			// Check the queuing duration is correctly observed in the corresponding metric
-			Expect(metrics).To(HaveKeyWithValue("camel_k_build_queue_duration_seconds",
-				EqualP(prometheus.MetricFamily{
+			Expect(metrics["camel_k_build_queue_duration_seconds"]).To(EqualP(
+				prometheus.MetricFamily{
 					Name: stringP("camel_k_build_queue_duration_seconds"),
 					Help: stringP("Camel K build queue duration"),
 					Type: metricTypeP(prometheus.MetricType_HISTOGRAM),
 					Metric: []*prometheus.Metric{
 						{
+							Label: []*prometheus.LabelPair{
+								label("type", "fast-jar"),
+							},
 							Histogram: &prometheus.Histogram{
 								SampleCount: uint64P(1),
 								SampleSum:   histogram.SampleSum,
@@ -375,11 +403,12 @@ func TestMetrics(t *testing.T) {
 							},
 						},
 					},
-				}),
+				},
 			))
 		})
 
 		t.Run("Integration first readiness metric", func(t *testing.T) {
+			RegisterTestingT(t)
 			var ts1, ts2 time.Time
 
 			// The start time is taken from the Integration status initialization timestamp
@@ -416,8 +445,9 @@ func TestMetrics(t *testing.T) {
 			Expect(math.Abs((durationFromLogs - duration).Seconds())).To(BeNumerically("<", 1))
 
 			// Check the duration is correctly observed in the corresponding metric
-			Expect(metrics).To(HaveKeyWithValue("camel_k_integration_first_readiness_seconds",
-				EqualP(prometheus.MetricFamily{
+			Expect(metrics).To(HaveKey("camel_k_integration_first_readiness_seconds"))
+			Expect(metrics["camel_k_integration_first_readiness_seconds"]).To(EqualP(
+				prometheus.MetricFamily{
 					Name: stringP("camel_k_integration_first_readiness_seconds"),
 					Help: stringP("Camel K integration time to first readiness"),
 					Type: metricTypeP(prometheus.MetricType_HISTOGRAM),
@@ -430,7 +460,7 @@ func TestMetrics(t *testing.T) {
 							},
 						},
 					},
-				}),
+				},
 			))
 		})
 
@@ -480,14 +510,6 @@ func buckets(value float64, upperBounds []float64) []*prometheus.Bucket {
 func parsePrometheusData(data []byte) (map[string]*prometheus.MetricFamily, error) {
 	var parser expfmt.TextParser
 	return parser.TextToMetricFamilies(bytes.NewReader(data))
-}
-
-func EqualP(expected interface{}) types.GomegaMatcher {
-	return PointTo(Equal(expected))
-}
-
-func MatchFieldsP(options Options, fields Fields) types.GomegaMatcher {
-	return PointTo(MatchFields(options, fields))
 }
 
 func stringP(s string) *string {

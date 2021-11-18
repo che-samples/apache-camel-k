@@ -39,7 +39,7 @@ Full command: kamel run Hello.java --dependency mvn:org.my:application:1.0
 Multiple options can be specified for an integration.
 For example, the following modeline options enables 3scale and limits the integration container memory:
 
-.ThreeSscaleRest.java
+.ThreeScaleRest.java
 [source,java]
 ----
 // camel-k: trait=3scale.enabled=true trait=container.limit-memory=256Mi // <1>
@@ -66,6 +66,12 @@ The following is a partial list of useful options:
 |===
 |Option | Description
 
+|build-property
+|Add a build time property or properties file (syntax: _[my-key=my-value\|file:/path/to/my-conf.properties]_
+
+|config
+|Add a runtime configuration from a Configmap, Secret or file (syntax: _[configmap\|secret\|file]:name[/key]_, where name represents the local file path or the configmap/secret name and key optionally represents the configmap/secret key to be filtered)
+
 |dependency
 |An external library that should be included, e.g. for Maven dependencies `dependency=mvn:org.my:app:1.0`
 
@@ -85,13 +91,10 @@ The following is a partial list of useful options:
 |Trait profile used for deployment
 
 |property
-|Add a camel property
-
-|property-file
-|Bind a property file to the integration, e.g. `property-file=integration.properties`
+|Add a runtime property or properties file (syntax: _[my-key=my-value\|file:/path/to/my-conf.properties]_)
 
 |resource
-|Add a resource
+|Add a runtime resource from a Configmap, Secret or file (syntax: _[configmap\|secret\|file]:name[/key][@path]_, where name represents the local file path or the configmap/secret name, key optionally represents the configmap/secret key to be filtered and path represents the destination path)
 
 |trait
 |Configure a trait, e.g. `trait=service.enabled=false`

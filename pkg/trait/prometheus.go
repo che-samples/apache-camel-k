@@ -52,16 +52,16 @@ type prometheusTrait struct {
 func newPrometheusTrait() Trait {
 	return &prometheusTrait{
 		BaseTrait:  NewBaseTrait("prometheus", 1900),
-		PodMonitor: util.BoolP(true),
+		PodMonitor: BoolP(true),
 	}
 }
 
 func (t *prometheusTrait) Configure(e *Environment) (bool, error) {
-	return t.Enabled != nil && *t.Enabled && e.IntegrationInPhase(
-		v1.IntegrationPhaseInitialization,
-		v1.IntegrationPhaseDeploying,
-		v1.IntegrationPhaseRunning,
-	), nil
+	if IsNilOrFalse(t.Enabled) {
+		return false, nil
+	}
+
+	return e.IntegrationInPhase(v1.IntegrationPhaseInitialization) || e.IntegrationInRunningPhases(), nil
 }
 
 func (t *prometheusTrait) Apply(e *Environment) (err error) {
@@ -71,7 +71,7 @@ func (t *prometheusTrait) Apply(e *Environment) (err error) {
 		return nil
 	}
 
-	container := e.getIntegrationContainer()
+	container := e.GetIntegrationContainer()
 	if container == nil {
 		e.Integration.Status.SetCondition(
 			v1.IntegrationConditionPrometheusAvailable,
@@ -102,7 +102,7 @@ func (t *prometheusTrait) Apply(e *Environment) (err error) {
 	condition.Message = fmt.Sprintf("%s(%d)", container.Name, containerPort.ContainerPort)
 
 	// Add the PodMonitor resource
-	if util.IsTrue(t.PodMonitor) {
+	if IsTrue(t.PodMonitor) {
 		portName := containerPort.Name
 		// Knative defaults to naming the userland container port "user-port".
 		// Let's rely on that default, granted it is not officially part of the Knative

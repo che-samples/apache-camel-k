@@ -28,6 +28,8 @@ import (
 )
 
 func NewtestYAMLInspector(t *testing.T) YAMLInspector {
+	t.Helper()
+
 	catalog, err := camel.DefaultCatalog()
 	assert.Nil(t, err)
 
@@ -69,6 +71,18 @@ const YAMLInvalid = `
       - "log:out"
 `
 
+const YAMLInDepthChannel = `
+- from:
+    uri: knative:channel/mychannel
+    steps:
+      - choice:
+          when:
+          - simple: "${body}"
+            steps:
+            - to:
+                uri: knative:endpoint/service
+`
+
 func TestYAMLDependencies(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -100,6 +114,14 @@ func TestYAMLDependencies(t *testing.T) {
 			name:   "invalid",
 			source: YAMLInvalid,
 			dependencies: []string{
+				`mvn:org.apache.camel.k:camel-k-knative-consumer`,
+			},
+		},
+		{
+			name:   "in-depth",
+			source: YAMLInDepthChannel,
+			dependencies: []string{
+				`mvn:org.apache.camel.k:camel-k-knative-producer`,
 				`mvn:org.apache.camel.k:camel-k-knative-consumer`,
 			},
 		},
@@ -242,7 +264,7 @@ func TestYAMLRouteAndFromEquivalence(t *testing.T) {
 			inspector := NewtestYAMLInspector(t)
 			err := inspector.Extract(code, &meta)
 			assert.Nil(t, err)
-			assert.Equal(t, meta.FromURIs, []string{"timer:tick"})
+			assert.Equal(t, meta.FromURIs, []string{"timer:tick?period=5000"})
 			assert.Equal(t, meta.ToURIs, []string{"log:info"})
 			assert.True(t, meta.Dependencies.Has("camel:log"))
 			assert.True(t, meta.Dependencies.Has("camel:timer"))
@@ -324,6 +346,173 @@ func TestYAMLJson(t *testing.T) {
 			assert.Nil(t, err)
 			assert.True(t, meta.RequiredCapabilities.IsEmpty())
 			assert.Contains(t, meta.Dependencies.List(), test.dependency)
+		})
+	}
+}
+
+const YAMLKameletEipNoID = `
+- from:
+    uri: timer:tick
+    steps:
+    - kamelet: "foo"
+`
+
+const YAMLKameletEipInline = `
+- from:
+    uri: timer:tick
+    steps:
+    - kamelet: "foo/bar?baz=test"
+`
+
+const YAMLKameletEipMap = `
+- from:
+    uri: timer:tick
+    steps:
+    - kamelet: 
+        name: "foo/bar?baz=test"
+`
+
+const YAMLKameletEipMapWithParams = `
+- from:
+    uri: timer:tick
+    steps:
+    - kamelet: 
+        name: "foo/bar"
+        parameters:
+          baz:test
+`
+
+const YAMLKameletEndpoint = `
+- from:
+    uri: timer:tick
+    steps:
+    - to: "kamelet:foo/bar?baz=test"
+`
+
+func TestYAMLKamelet(t *testing.T) {
+	tc := []struct {
+		source   string
+		kamelets []string
+	}{
+		{
+			source:   YAMLKameletEipNoID,
+			kamelets: []string{"foo"},
+		},
+		{
+			source:   YAMLKameletEipInline,
+			kamelets: []string{"foo/bar"},
+		},
+		{
+			source:   YAMLKameletEipMap,
+			kamelets: []string{"foo/bar"},
+		},
+		{
+			source:   YAMLKameletEipMapWithParams,
+			kamelets: []string{"foo/bar"},
+		},
+		{
+			source:   YAMLKameletEndpoint,
+			kamelets: []string{"foo/bar"},
+		},
+	}
+
+	for i, test := range tc {
+		t.Run(fmt.Sprintf("TestYAMLKamelet-%d", i), func(t *testing.T) {
+			code := v1.SourceSpec{
+				DataSpec: v1.DataSpec{
+					Content: test.source,
+				},
+			}
+
+			catalog, err := camel.DefaultCatalog()
+			assert.Nil(t, err)
+
+			meta := NewMetadata()
+			inspector := YAMLInspector{
+				baseInspector: baseInspector{
+					catalog: catalog,
+				},
+			}
+
+			err = inspector.Extract(code, &meta)
+			assert.Nil(t, err)
+			assert.True(t, meta.RequiredCapabilities.IsEmpty())
+
+			for _, k := range test.kamelets {
+				assert.Contains(t, meta.Kamelets, k)
+			}
+		})
+	}
+}
+
+const YAMLKameletExplicitParams = `
+- from:
+    uri: cron:tab
+    parameters:
+      schedule: "* * * * ?"
+    steps:
+    - to:
+        uri: knative:channel/a
+        parameters:
+          cloudEventsSpecVersion: "1.0"
+`
+
+const YAMLKameletExplicitNumericParams = `
+- from:
+    uri: timer:tick
+    parameters:
+      period: 1000
+    steps:
+    - log: "hello"
+`
+
+func TestYAMLExplicitParameters(t *testing.T) {
+	tc := []struct {
+		source   string
+		fromURIs []string
+		toURIs   []string
+	}{
+		{
+			source:   YAMLKameletExplicitParams,
+			fromURIs: []string{"cron:tab?schedule=%2A+%2A+%2A+%2A+%3F"},
+			toURIs:   []string{"knative:channel/a?cloudEventsSpecVersion=1.0"},
+		},
+		{
+			source:   YAMLKameletExplicitNumericParams,
+			fromURIs: []string{"timer:tick?period=1000"},
+		},
+	}
+
+	for i, test := range tc {
+		t.Run(fmt.Sprintf("TestYAMLExplicitParameters-%d", i), func(t *testing.T) {
+			code := v1.SourceSpec{
+				DataSpec: v1.DataSpec{
+					Content: test.source,
+				},
+			}
+
+			catalog, err := camel.DefaultCatalog()
+			assert.Nil(t, err)
+
+			meta := NewMetadata()
+			inspector := YAMLInspector{
+				baseInspector: baseInspector{
+					catalog: catalog,
+				},
+			}
+
+			err = inspector.Extract(code, &meta)
+			assert.Nil(t, err)
+			assert.True(t, meta.RequiredCapabilities.IsEmpty())
+
+			assert.Len(t, meta.FromURIs, len(test.fromURIs))
+			for _, k := range test.fromURIs {
+				assert.Contains(t, meta.FromURIs, k)
+			}
+			assert.Len(t, meta.ToURIs, len(test.toURIs))
+			for _, k := range test.toURIs {
+				assert.Contains(t, meta.ToURIs, k)
+			}
 		})
 	}
 }

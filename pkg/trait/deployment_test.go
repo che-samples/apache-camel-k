@@ -18,23 +18,22 @@ limitations under the License.
 package trait
 
 import (
-	"context"
 	"testing"
-
-	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
-	"github.com/apache/camel-k/pkg/util/kubernetes"
-	"github.com/apache/camel-k/pkg/util/test"
 
 	"github.com/stretchr/testify/assert"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
+	"github.com/apache/camel-k/pkg/util/kubernetes"
+	"github.com/apache/camel-k/pkg/util/test"
 )
 
 func TestConfigureDisabledDeploymentTraitDoesNotSucceed(t *testing.T) {
 	deploymentTrait, environment := createNominalDeploymentTest()
-	deploymentTrait.Enabled = new(bool)
+	deploymentTrait.Enabled = BoolP(false)
 
 	configured, err := deploymentTrait.Configure(environment)
 
@@ -45,7 +44,7 @@ func TestConfigureDisabledDeploymentTraitDoesNotSucceed(t *testing.T) {
 	assert.Equal(t, "explicitly disabled", conditions[0].Message)
 }
 
-func TestConfigureDeploymentTraitWhileIntegrationIsRuningDoesSucceed(t *testing.T) {
+func TestConfigureDeploymentTraitWhileIntegrationIsRunningDoesSucceed(t *testing.T) {
 	deploymentTrait, environment := createNominalDeploymentTest()
 	environment.Integration.Status.SetCondition(
 		v1.IntegrationConditionDeploymentAvailable,
@@ -93,7 +92,7 @@ func TestConfigureDeploymentTraitWhileWaitingPlatformDoesNotSucceed(t *testing.T
 
 func TestApplyDeploymentTraitWhileResolvingKitDoesNotSucceed(t *testing.T) {
 	deploymentTrait, environment := createNominalDeploymentTest()
-	environment.Integration.Status.Phase = v1.IntegrationPhaseResolvingKit
+	environment.Integration.Status.Phase = v1.IntegrationPhaseBuildingKit
 
 	configured, err := deploymentTrait.Configure(environment)
 
@@ -103,21 +102,8 @@ func TestApplyDeploymentTraitWhileResolvingKitDoesNotSucceed(t *testing.T) {
 
 func TestApplyDeploymentTraitWhileDeployingIntegrationDoesSucceed(t *testing.T) {
 	deploymentTrait, environment := createNominalDeploymentTest()
-	environment.Integration.Spec.Configuration = append(environment.Integration.Spec.Configuration, v1.ConfigurationSpec{
-		Type:  "property",
-		Value: "a=b",
-	})
-
 	err := deploymentTrait.Apply(environment)
-
 	assert.Nil(t, err)
-
-	assert.NotNil(t, environment.Resources.GetConfigMap(func(cm *corev1.ConfigMap) bool {
-		return cm.Labels["camel.apache.org/properties.type"] == "user"
-	}))
-	assert.Nil(t, environment.Resources.GetConfigMap(func(cm *corev1.ConfigMap) bool {
-		return cm.Labels["camel.apache.org/properties.type"] == "application"
-	}))
 
 	deployment := environment.Resources.GetDeployment(func(deployment *appsv1.Deployment) bool { return true })
 	assert.NotNil(t, deployment)
@@ -141,12 +127,28 @@ func TestApplyDeploymentTraitWhileRunningIntegrationDoesSucceed(t *testing.T) {
 	assert.NotNil(t, deployment)
 	assert.Equal(t, "integration-name", deployment.Name)
 	assert.Equal(t, int32(3), *deployment.Spec.Replicas)
+	assert.Equal(t, int32(60), *deployment.Spec.ProgressDeadlineSeconds)
+}
+
+func TestApplyDeploymentTraitWithProgressDeadline(t *testing.T) {
+	deploymentTrait, environment := createNominalDeploymentTest()
+	progressDeadlineSeconds := int32(120)
+	deploymentTrait.ProgressDeadlineSeconds = &progressDeadlineSeconds
+	environment.Integration.Status.Phase = v1.IntegrationPhaseRunning
+
+	err := deploymentTrait.Apply(environment)
+
+	assert.Nil(t, err)
+
+	deployment := environment.Resources.GetDeployment(func(deployment *appsv1.Deployment) bool { return true })
+	assert.NotNil(t, deployment)
+	assert.Equal(t, "integration-name", deployment.Name)
+	assert.Equal(t, int32(120), *deployment.Spec.ProgressDeadlineSeconds)
 }
 
 func createNominalDeploymentTest() (*deploymentTrait, *Environment) {
-	trait := newDeploymentTrait().(*deploymentTrait)
-	enabled := true
-	trait.Enabled = &enabled
+	trait, _ := newDeploymentTrait().(*deploymentTrait)
+	trait.Enabled = BoolP(true)
 	trait.Client, _ = test.NewFakeClient(&appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "integration-name",
@@ -177,13 +179,14 @@ func createNominalDeploymentTest() (*deploymentTrait, *Environment) {
 	replicas := int32(3)
 
 	environment := &Environment{
-		Catalog: NewCatalog(context.TODO(), nil),
+		Catalog: NewCatalog(nil),
 		Integration: &v1.Integration{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "integration-name",
 			},
 			Spec: v1.IntegrationSpec{
 				Replicas: &replicas,
+				Traits:   make(map[string]v1.TraitSpec),
 			},
 			Status: v1.IntegrationStatus{
 				Phase: v1.IntegrationPhaseDeploying,

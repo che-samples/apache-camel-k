@@ -1,3 +1,3 @@
-# Basic Camel K examples
+# Camel K basic examples
 
-Find useful examples about how to use certain basic features of Camel K.
+Find useful examples about how to run an integration in Camel K.

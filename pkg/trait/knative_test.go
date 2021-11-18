@@ -18,7 +18,6 @@ limitations under the License.
 package trait
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,9 +25,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"knative.dev/eventing/pkg/apis/duck/v1beta1"
-	eventing "knative.dev/eventing/pkg/apis/eventing/v1beta1"
-	messaging "knative.dev/eventing/pkg/apis/messaging/v1beta1"
+	eventingduckv1 "knative.dev/eventing/pkg/apis/duck/v1"
+	eventing "knative.dev/eventing/pkg/apis/eventing/v1"
+	messaging "knative.dev/eventing/pkg/apis/messaging/v1"
 	"knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	serving "knative.dev/serving/pkg/apis/serving/v1"
@@ -46,7 +45,7 @@ func TestKnativeEnvConfigurationFromTrait(t *testing.T) {
 	catalog, err := camel.DefaultCatalog()
 	assert.Nil(t, err)
 
-	traitCatalog := NewCatalog(context.TODO(), nil)
+	traitCatalog := NewCatalog(nil)
 
 	environment := Environment{
 		CamelCatalog: catalog,
@@ -87,7 +86,7 @@ func TestKnativeEnvConfigurationFromTrait(t *testing.T) {
 				Cluster: v1.IntegrationPlatformClusterOpenShift,
 				Build: v1.IntegrationPlatformBuildSpec{
 					PublishStrategy: v1.IntegrationPlatformBuildPublishStrategyS2I,
-					Registry:        v1.IntegrationPlatformRegistrySpec{Address: "registry"},
+					Registry:        v1.RegistrySpec{Address: "registry"},
 				},
 				Profile: v1.TraitProfileKnative,
 			},
@@ -101,12 +100,12 @@ func TestKnativeEnvConfigurationFromTrait(t *testing.T) {
 	c, err := NewFakeClient("ns")
 	assert.Nil(t, err)
 
-	tc := NewCatalog(context.TODO(), c)
+	tc := NewCatalog(c)
 
 	err = tc.configure(&environment)
 	assert.Nil(t, err)
 
-	tr := tc.GetTrait("knative").(*knativeTrait)
+	tr, _ := tc.GetTrait("knative").(*knativeTrait)
 	ok, err := tr.Configure(&environment)
 	assert.Nil(t, err)
 	assert.True(t, ok)
@@ -121,11 +120,11 @@ func TestKnativeEnvConfigurationFromTrait(t *testing.T) {
 	err = ne.Deserialize(kc.Value)
 	assert.Nil(t, err)
 
-	cSource1 := ne.FindService("channel-source-1", knativeapi.CamelEndpointKindSource, knativeapi.CamelServiceTypeChannel, "messaging.knative.dev/v1beta1", "Channel")
+	cSource1 := ne.FindService("channel-source-1", knativeapi.CamelEndpointKindSource, knativeapi.CamelServiceTypeChannel, "messaging.knative.dev/v1", "Channel")
 	assert.NotNil(t, cSource1)
 	assert.Empty(t, cSource1.URL)
 
-	cSink1 := ne.FindService("channel-sink-1", knativeapi.CamelEndpointKindSink, knativeapi.CamelServiceTypeChannel, "messaging.knative.dev/v1beta1", "Channel")
+	cSink1 := ne.FindService("channel-sink-1", knativeapi.CamelEndpointKindSink, knativeapi.CamelServiceTypeChannel, "messaging.knative.dev/v1", "Channel")
 	assert.NotNil(t, cSink1)
 	assert.Equal(t, "http://channel-sink-1.host/", cSink1.URL)
 
@@ -140,9 +139,9 @@ func TestKnativeEnvConfigurationFromTrait(t *testing.T) {
 	assert.NotNil(t, eSink2)
 	assert.Equal(t, "http://endpoint-sink-2.host/", eSink2.URL)
 
-	eEventSource := ne.FindService("default", knativeapi.CamelEndpointKindSource, knativeapi.CamelServiceTypeEvent, "eventing.knative.dev/v1beta1", "Broker")
+	eEventSource := ne.FindService("default", knativeapi.CamelEndpointKindSource, knativeapi.CamelServiceTypeEvent, "eventing.knative.dev/v1", "Broker")
 	assert.NotNil(t, eEventSource)
-	eEventSink := ne.FindService("default", knativeapi.CamelEndpointKindSink, knativeapi.CamelServiceTypeEvent, "eventing.knative.dev/v1beta1", "Broker")
+	eEventSink := ne.FindService("default", knativeapi.CamelEndpointKindSink, knativeapi.CamelServiceTypeEvent, "eventing.knative.dev/v1", "Broker")
 	assert.NotNil(t, eEventSink)
 	assert.Equal(t, "http://broker-default.host/", eEventSink.URL)
 }
@@ -151,7 +150,7 @@ func TestKnativeEnvConfigurationFromSource(t *testing.T) {
 	catalog, err := camel.DefaultCatalog()
 	assert.Nil(t, err)
 
-	traitCatalog := NewCatalog(context.TODO(), nil)
+	traitCatalog := NewCatalog(nil)
 
 	environment := Environment{
 		CamelCatalog: catalog,
@@ -206,7 +205,7 @@ func TestKnativeEnvConfigurationFromSource(t *testing.T) {
 				Cluster: v1.IntegrationPlatformClusterOpenShift,
 				Build: v1.IntegrationPlatformBuildSpec{
 					PublishStrategy: v1.IntegrationPlatformBuildPublishStrategyS2I,
-					Registry:        v1.IntegrationPlatformRegistrySpec{Address: "registry"},
+					Registry:        v1.RegistrySpec{Address: "registry"},
 				},
 				Profile: v1.TraitProfileKnative,
 			},
@@ -220,12 +219,12 @@ func TestKnativeEnvConfigurationFromSource(t *testing.T) {
 	c, err := NewFakeClient("ns")
 	assert.Nil(t, err)
 
-	tc := NewCatalog(context.TODO(), c)
+	tc := NewCatalog(c)
 
 	err = tc.configure(&environment)
 	assert.Nil(t, err)
 
-	tr := tc.GetTrait("knative").(*knativeTrait)
+	tr, _ := tc.GetTrait("knative").(*knativeTrait)
 
 	ok, err := tr.Configure(&environment)
 	assert.Nil(t, err)
@@ -288,7 +287,7 @@ func TestKnativePlatformHttpConfig(t *testing.T) {
 			c, err := NewFakeClient("ns")
 			assert.Nil(t, err)
 
-			tc := NewCatalog(context.TODO(), c)
+			tc := NewCatalog(c)
 
 			err = tc.configure(&environment)
 			assert.Nil(t, err)
@@ -335,7 +334,7 @@ func TestKnativePlatformHttpDependencies(t *testing.T) {
 			c, err := NewFakeClient("ns")
 			assert.Nil(t, err)
 
-			tc := NewCatalog(context.TODO(), c)
+			tc := NewCatalog(c)
 
 			err = tc.configure(&environment)
 			assert.Nil(t, err)
@@ -350,10 +349,12 @@ func TestKnativePlatformHttpDependencies(t *testing.T) {
 }
 
 func NewFakeEnvironment(t *testing.T, source v1.SourceSpec) Environment {
+	t.Helper()
+
 	catalog, err := camel.DefaultCatalog()
 	assert.Nil(t, err)
 
-	traitCatalog := NewCatalog(context.TODO(), nil)
+	traitCatalog := NewCatalog(nil)
 
 	environment := Environment{
 		CamelCatalog: catalog,
@@ -389,7 +390,7 @@ func NewFakeEnvironment(t *testing.T, source v1.SourceSpec) Environment {
 				Cluster: v1.IntegrationPlatformClusterOpenShift,
 				Build: v1.IntegrationPlatformBuildSpec{
 					PublishStrategy: v1.IntegrationPlatformBuildPublishStrategyS2I,
-					Registry:        v1.IntegrationPlatformRegistrySpec{Address: "registry"},
+					Registry:        v1.RegistrySpec{Address: "registry"},
 				},
 				Profile: v1.TraitProfileKnative,
 			},
@@ -436,7 +437,7 @@ func NewFakeClient(namespace string) (client.Client, error) {
 				Name:      "channel-source-1",
 			},
 			Status: messaging.ChannelStatus{
-				ChannelableStatus: v1beta1.ChannelableStatus{
+				ChannelableStatus: eventingduckv1.ChannelableStatus{
 					AddressStatus: duckv1.AddressStatus{
 						Address: &duckv1.Addressable{
 							URL: channelSourceURL,
@@ -455,7 +456,7 @@ func NewFakeClient(namespace string) (client.Client, error) {
 				Name:      "channel-sink-1",
 			},
 			Status: messaging.ChannelStatus{
-				ChannelableStatus: v1beta1.ChannelableStatus{
+				ChannelableStatus: eventingduckv1.ChannelableStatus{
 					AddressStatus: duckv1.AddressStatus{
 						Address: &duckv1.Addressable{
 							URL: channelSinkURL,

@@ -18,8 +18,6 @@ limitations under the License.
 package trait
 
 import (
-	"context"
-	"encoding/json"
 	"reflect"
 	"sort"
 	"strings"
@@ -39,8 +37,8 @@ type Catalog struct {
 }
 
 // NewCatalog creates a new trait Catalog
-func NewCatalog(ctx context.Context, c client.Client) *Catalog {
-	var traitList = make([]Trait, 0, len(FactoryList))
+func NewCatalog(c client.Client) *Catalog {
+	traitList := make([]Trait, 0, len(FactoryList))
 	for _, factory := range FactoryList {
 		traitList = append(traitList, factory())
 	}
@@ -56,10 +54,7 @@ func NewCatalog(ctx context.Context, c client.Client) *Catalog {
 		traits: traitList,
 	}
 
-	for _, t := range catalog.allTraits() {
-		if ctx != nil {
-			t.InjectContext(ctx)
-		}
+	for _, t := range catalog.AllTraits() {
 		if c != nil {
 			t.InjectClient(c)
 		}
@@ -67,7 +62,7 @@ func NewCatalog(ctx context.Context, c client.Client) *Catalog {
 	return &catalog
 }
 
-func (c *Catalog) allTraits() []Trait {
+func (c *Catalog) AllTraits() []Trait {
 	return append([]Trait(nil), c.traits...)
 }
 
@@ -84,7 +79,7 @@ func (c *Catalog) traitsFor(environment *Environment) []Trait {
 // so care must be taken while changing the lists order.
 func (c *Catalog) TraitsForProfile(profile v1.TraitProfile) []Trait {
 	var res []Trait
-	for _, t := range c.allTraits() {
+	for _, t := range c.AllTraits() {
 		if t.IsAllowedInProfile(profile) {
 			res = append(res, t)
 		}
@@ -103,6 +98,7 @@ func (c *Catalog) apply(environment *Environment) error {
 	for _, trait := range traits {
 		if environment.Platform == nil && trait.RequiresIntegrationPlatform() {
 			c.L.Debug("Skipping trait because of missing integration platform: %s", trait.ID())
+
 			continue
 		}
 		applicable = true
@@ -147,7 +143,7 @@ func (c *Catalog) apply(environment *Environment) error {
 
 // GetTrait returns the trait with the given ID
 func (c *Catalog) GetTrait(id string) Trait {
-	for _, t := range c.allTraits() {
+	for _, t := range c.AllTraits() {
 		if t.ID() == ID(id) {
 			return t
 		}
@@ -155,53 +151,10 @@ func (c *Catalog) GetTrait(id string) Trait {
 	return nil
 }
 
-func (c *Catalog) configure(env *Environment) error {
-	if env.Platform != nil && env.Platform.Status.Traits != nil {
-		if err := c.configureTraits(env.Platform.Status.Traits); err != nil {
-			return err
-		}
-	}
-	if env.IntegrationKit != nil && env.IntegrationKit.Spec.Traits != nil {
-		if err := c.configureTraits(env.IntegrationKit.Spec.Traits); err != nil {
-			return err
-		}
-	}
-	if env.Integration != nil && env.Integration.Spec.Traits != nil {
-		if err := c.configureTraits(env.Integration.Spec.Traits); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (c *Catalog) configureTraits(traits map[string]v1.TraitSpec) error {
-	for id, traitSpec := range traits {
-		catTrait := c.GetTrait(id)
-		if catTrait != nil {
-			trait := traitSpec
-			if err := decodeTraitSpec(&trait, catTrait); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-func decodeTraitSpec(in *v1.TraitSpec, target interface{}) error {
-	data, err := json.Marshal(&in.Configuration)
-	if err != nil {
-		return err
-	}
-
-	return json.Unmarshal(data, &target)
-}
-
 // ComputeTraitsProperties returns all key/value configuration properties that can be used to configure traits
 func (c *Catalog) ComputeTraitsProperties() []string {
 	results := make([]string, 0)
-	for _, trait := range c.allTraits() {
+	for _, trait := range c.AllTraits() {
 		trait := trait // pin
 		c.processFields(structs.Fields(trait), func(name string) {
 			results = append(results, string(trait.ID())+"."+name)

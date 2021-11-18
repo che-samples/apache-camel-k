@@ -56,7 +56,6 @@ type IntegrationStatus struct {
 	Platform           string                  `json:"platform,omitempty"`
 	GeneratedSources   []SourceSpec            `json:"generatedSources,omitempty"`
 	GeneratedResources []ResourceSpec          `json:"generatedResources,omitempty"`
-	Failure            *Failure                `json:"failure,omitempty"`
 	RuntimeVersion     string                  `json:"runtimeVersion,omitempty"`
 	RuntimeProvider    RuntimeProvider         `json:"runtimeProvider,omitempty"`
 	Configuration      []ConfigurationSpec     `json:"configuration,omitempty"`
@@ -117,16 +116,10 @@ const (
 	IntegrationPhaseWaitingForPlatform IntegrationPhase = "Waiting For Platform"
 	// IntegrationPhaseBuildingKit --
 	IntegrationPhaseBuildingKit IntegrationPhase = "Building Kit"
-	// IntegrationPhaseResolvingKit --
-	IntegrationPhaseResolvingKit IntegrationPhase = "Resolving Kit"
-	// IntegrationPhaseWaitingForBindings e.g Service Bindings --
-	IntegrationPhaseWaitingForBindings IntegrationPhase = "Waiting for Bindings"
 	// IntegrationPhaseDeploying --
 	IntegrationPhaseDeploying IntegrationPhase = "Deploying"
 	// IntegrationPhaseRunning --
 	IntegrationPhaseRunning IntegrationPhase = "Running"
-	// IntegrationPhaseUpdating is a phase where the operator is not supposed to interact with the resource
-	IntegrationPhaseUpdating IntegrationPhase = "Updating"
 	// IntegrationPhaseError --
 	IntegrationPhaseError IntegrationPhase = "Error"
 
@@ -142,8 +135,6 @@ const (
 	IntegrationConditionKnativeServiceAvailable IntegrationConditionType = "KnativeServiceAvailable"
 	// IntegrationConditionCronJobAvailable --
 	IntegrationConditionCronJobAvailable IntegrationConditionType = "CronJobAvailable"
-	// IntegrationConditionServiceBindingsCollectionReady --
-	IntegrationConditionServiceBindingsCollectionReady IntegrationConditionType = "ServiceBindingsCollectionReady"
 	// IntegrationConditionExposureAvailable --
 	IntegrationConditionExposureAvailable IntegrationConditionType = "ExposureAvailable"
 	// IntegrationConditionPrometheusAvailable --
@@ -191,14 +182,35 @@ const (
 	IntegrationConditionJolokiaAvailableReason string = "JolokiaAvailable"
 	// IntegrationConditionProbesAvailableReason --
 	IntegrationConditionProbesAvailableReason string = "ProbesAvailable"
-	// IntegrationConditionErrorReason --
-	IntegrationConditionErrorReason string = "Error"
+
+	// IntegrationConditionKnativeServiceReadyReason --
+	IntegrationConditionKnativeServiceReadyReason string = "KnativeServiceReady"
+	// IntegrationConditionDeploymentReadyReason --
+	IntegrationConditionDeploymentReadyReason string = "DeploymentReady"
+	// IntegrationConditionDeploymentProgressingReason --
+	IntegrationConditionDeploymentProgressingReason string = "DeploymentProgressing"
 	// IntegrationConditionCronJobCreatedReason --
 	IntegrationConditionCronJobCreatedReason string = "CronJobCreated"
-	// IntegrationConditionReplicaSetReadyReason --
-	IntegrationConditionReplicaSetReadyReason string = "ReplicaSetReady"
-	// IntegrationConditionReplicaSetNotReadyReason --
-	IntegrationConditionReplicaSetNotReadyReason string = "ReplicaSetNotReady"
+	// IntegrationConditionCronJobActiveReason --
+	IntegrationConditionCronJobActiveReason string = "CronJobActive"
+	// IntegrationConditionLastJobSucceededReason --
+	IntegrationConditionLastJobSucceededReason string = "LastJobSucceeded"
+	// IntegrationConditionLastJobFailedReason --
+	IntegrationConditionLastJobFailedReason string = "LastJobFailed"
+	// IntegrationConditionRuntimeNotReadyReason --
+	IntegrationConditionRuntimeNotReadyReason string = "RuntimeNotReady"
+	// IntegrationConditionErrorReason --
+	IntegrationConditionErrorReason string = "Error"
+
+	// IntegrationConditionUnsupportedLanguageReason --
+	IntegrationConditionUnsupportedLanguageReason string = "UnsupportedLanguage"
+
+	// IntegrationConditionKameletsAvailable --
+	IntegrationConditionKameletsAvailable IntegrationConditionType = "KameletsAvailable"
+	// IntegrationConditionKameletsAvailableReason --
+	IntegrationConditionKameletsAvailableReason string = "KameletsAvailable"
+	// IntegrationConditionKameletsNotAvailableReason --
+	IntegrationConditionKameletsNotAvailableReason string = "KameletsNotAvailable"
 )
 
 // IntegrationCondition describes the state of a resource at a certain point.
@@ -215,7 +227,7 @@ type IntegrationCondition struct {
 	FirstTruthyTime *metav1.Time `json:"firstTruthyTime,omitempty"`
 	// The reason for the condition's last transition.
 	Reason string `json:"reason,omitempty"`
-	// A human readable message indicating details about the transition.
+	// A human-readable message indicating details about the transition.
 	Message string `json:"message,omitempty"`
 }
 type PodSpecTemplate struct {
@@ -242,5 +254,4 @@ type PodSpec struct {
 	NodeSelector map[string]string `json:"nodeSelector,omitempty" protobuf:"bytes,7,rep,name=nodeSelector"`
 
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty" patchStrategy:"merge" patchMergeKey:"topologyKey" protobuf:"bytes,33,opt,name=topologySpreadConstraints"`
-
 }

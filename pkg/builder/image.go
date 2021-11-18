@@ -22,13 +22,14 @@ import (
 	"os"
 	"path"
 
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
-	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
-	"github.com/apache/camel-k/pkg/platform"
 	"github.com/apache/camel-k/pkg/util"
-	"github.com/apache/camel-k/pkg/util/controller"
+	"github.com/apache/camel-k/pkg/util/defaults"
 )
 
 const (
@@ -37,7 +38,62 @@ const (
 	DependenciesDir = "dependencies"
 )
 
+func init() {
+	registerSteps(Image)
+}
+
+type imageSteps struct {
+	IncrementalImageContext Step
+	NativeImageContext      Step
+	StandardImageContext    Step
+	ExecutableDockerfile    Step
+	JvmDockerfile           Step
+}
+
+var Image = imageSteps{
+	IncrementalImageContext: NewStep(ApplicationPackagePhase, incrementalImageContext),
+	NativeImageContext:      NewStep(ApplicationPackagePhase, nativeImageContext),
+	StandardImageContext:    NewStep(ApplicationPackagePhase, standardImageContext),
+	ExecutableDockerfile:    NewStep(ApplicationPackagePhase+1, executableDockerfile),
+	JvmDockerfile:           NewStep(ApplicationPackagePhase+1, jvmDockerfile),
+}
+
 type artifactsSelector func(ctx *builderContext) error
+
+func nativeImageContext(ctx *builderContext) error {
+	return imageContext(ctx, func(ctx *builderContext) error {
+		runner := "camel-k-integration-" + defaults.Version + "-runner"
+
+		ctx.BaseImage = "quay.io/quarkus/quarkus-distroless-image:1.0"
+		ctx.Artifacts = []v1.Artifact{
+			{
+				ID:       runner,
+				Location: path.Join(ctx.Path, "maven", "target", runner),
+				Target:   runner,
+			},
+		}
+		ctx.SelectedArtifacts = ctx.Artifacts
+
+		return nil
+	})
+}
+
+func executableDockerfile(ctx *builderContext) error {
+	// #nosec G202
+	dockerfile := []byte(`
+		FROM ` + ctx.BaseImage + `
+		WORKDIR ` + DeploymentDir + `
+		COPY --chown=nonroot:root . ` + DeploymentDir + `
+		USER nonroot
+	`)
+
+	err := ioutil.WriteFile(path.Join(ctx.Path, ContextDir, "Dockerfile"), dockerfile, 0o777)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
 
 func standardImageContext(ctx *builderContext) error {
 	return imageContext(ctx, func(ctx *builderContext) error {
@@ -45,6 +101,22 @@ func standardImageContext(ctx *builderContext) error {
 
 		return nil
 	})
+}
+
+func jvmDockerfile(ctx *builderContext) error {
+	// #nosec G202
+	dockerfile := []byte(`
+		FROM ` + ctx.BaseImage + `
+		ADD . ` + DeploymentDir + `
+		USER 1000
+	`)
+
+	err := ioutil.WriteFile(path.Join(ctx.Path, ContextDir, "Dockerfile"), dockerfile, 0o777)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func incrementalImageContext(ctx *builderContext) error {
@@ -72,12 +144,9 @@ func incrementalImageContext(ctx *builderContext) error {
 					ctx.SelectedArtifacts = append(ctx.SelectedArtifacts, entry)
 				}
 			}
-		} else {
-			pl, err := platform.GetCurrent(ctx.C, ctx, ctx.Namespace)
-			if err != nil {
-				return err
-			}
-			ctx.BaseImage = pl.Status.Build.BaseImage
+		} else if ctx.BaseImage == "" {
+			// TODO: transient workaround to be removed in 1.8.x
+			ctx.BaseImage = defaults.BaseImage()
 		}
 
 		return nil
@@ -92,7 +161,7 @@ func imageContext(ctx *builderContext, selector artifactsSelector) error {
 
 	contextDir := path.Join(ctx.Path, ContextDir)
 
-	err = os.MkdirAll(contextDir, 0777)
+	err = os.MkdirAll(contextDir, 0o777)
 	if err != nil {
 		return err
 	}
@@ -107,39 +176,35 @@ func imageContext(ctx *builderContext, selector artifactsSelector) error {
 	for _, entry := range ctx.Resources {
 		filePath, fileName := path.Split(entry.Target)
 		if err := util.WriteFileWithContent(path.Join(contextDir, filePath), fileName, entry.Content); err != nil {
-			return nil
+			return err
 		}
-	}
-
-	// #nosec G202
-	dockerfile := []byte(`
-		FROM ` + ctx.BaseImage + `
-		ADD . ` + DeploymentDir + `
-		USER 1000
-	`)
-
-	err = ioutil.WriteFile(path.Join(contextDir, "Dockerfile"), dockerfile, 0777)
-	if err != nil {
-		return err
 	}
 
 	return nil
 }
 
 func listPublishedImages(context *builderContext) ([]v1.IntegrationKitStatus, error) {
-	options := []k8sclient.ListOption{
-		k8sclient.InNamespace(context.Namespace),
-		k8sclient.MatchingLabels{
+	excludeNativeImages, err := labels.NewRequirement(v1.IntegrationKitLayoutLabel, selection.NotEquals, []string{
+		v1.IntegrationKitLayoutNative,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	options := []ctrl.ListOption{
+		ctrl.InNamespace(context.Namespace),
+		ctrl.MatchingLabels{
+			v1.IntegrationKitTypeLabel:          v1.IntegrationKitTypePlatform,
 			"camel.apache.org/runtime.version":  context.Catalog.Runtime.Version,
 			"camel.apache.org/runtime.provider": string(context.Catalog.Runtime.Provider),
 		},
-		controller.NewLabelSelector("camel.apache.org/kit.type", selection.Equals, []string{
-			v1.IntegrationKitTypePlatform,
-		}),
+		ctrl.MatchingLabelsSelector{
+			Selector: labels.NewSelector().Add(*excludeNativeImages),
+		},
 	}
 
 	list := v1.NewIntegrationKitList()
-	err := context.Client.List(context.C, &list, options...)
+	err = context.Client.List(context.C, &list, options...)
 	if err != nil {
 		return nil, err
 	}

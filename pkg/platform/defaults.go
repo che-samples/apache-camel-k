@@ -20,6 +20,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -79,10 +80,10 @@ func ConfigureDefaults(ctx context.Context, c client.Client, p *v1.IntegrationPl
 		// Use the fastest strategy that they support (routine when possible)
 		if p.Status.Build.PublishStrategy == v1.IntegrationPlatformBuildPublishStrategyS2I ||
 			p.Status.Build.PublishStrategy == v1.IntegrationPlatformBuildPublishStrategySpectrum {
-			p.Status.Build.BuildStrategy = v1.IntegrationPlatformBuildStrategyRoutine
+			p.Status.Build.BuildStrategy = v1.BuildStrategyRoutine
 		} else {
 			// The build output has to be shared via a volume
-			p.Status.Build.BuildStrategy = v1.IntegrationPlatformBuildStrategyPod
+			p.Status.Build.BuildStrategy = v1.BuildStrategyPod
 		}
 	}
 
@@ -91,7 +92,7 @@ func ConfigureDefaults(ctx context.Context, c client.Client, p *v1.IntegrationPl
 		return err
 	}
 
-	if p.Status.Build.BuildStrategy == v1.IntegrationPlatformBuildStrategyPod {
+	if p.Status.Build.BuildStrategy == v1.BuildStrategyPod {
 		if err := createBuilderServiceAccount(ctx, c, p); err != nil {
 			return errors.Wrap(err, "cannot ensure service account is present")
 		}
@@ -106,8 +107,8 @@ func ConfigureDefaults(ctx context.Context, c client.Client, p *v1.IntegrationPl
 		log.Log.Info("No registry specified for publishing images")
 	}
 
-	if verbose && p.Status.Build.Maven.GetTimeout().Duration != 0 {
-		log.Log.Infof("Maven Timeout set to %s", p.Status.Build.Maven.GetTimeout().Duration)
+	if verbose && p.Status.Build.GetTimeout().Duration != 0 {
+		log.Log.Infof("Maven Timeout set to %s", p.Status.Build.GetTimeout().Duration)
 	}
 
 	return nil
@@ -144,6 +145,7 @@ func configureRegistry(ctx context.Context, c client.Client, p *v1.IntegrationPl
 			for _, secret := range sa.Secrets {
 				if strings.Contains(secret.Name, "camel-k-builder-dockercfg") {
 					p.Status.Build.Registry.Secret = secret.Name
+
 					break
 				}
 			}
@@ -184,26 +186,8 @@ func setPlatformDefaults(ctx context.Context, c client.Client, p *v1.Integration
 		}
 	}
 
-	if p.Status.Build.Maven.GetTimeout().Duration != 0 {
-		d := p.Status.Build.Maven.GetTimeout().Duration.Truncate(time.Second)
-
-		if verbose && p.Status.Build.Maven.GetTimeout().Duration != d {
-			log.Log.Infof("Maven timeout minimum unit is sec (configured: %s, truncated: %s)", p.Status.Build.Maven.GetTimeout().Duration, d)
-		}
-
-		p.Status.Build.Maven.Timeout = &metav1.Duration{
-			Duration: d,
-		}
-	}
-	if p.Status.Build.Maven.GetTimeout().Duration == 0 {
-		n := p.Status.Build.GetTimeout().Duration.Seconds() * 0.75
-		p.Status.Build.Maven.Timeout = &metav1.Duration{
-			Duration: (time.Duration(n) * time.Second).Truncate(time.Second),
-		}
-	}
-
 	if p.Status.Build.Maven.Settings.ConfigMapKeyRef == nil && p.Status.Build.Maven.Settings.SecretKeyRef == nil {
-		var repositories []maven.Repository
+		var repositories []v1.Repository
 		var mirrors []maven.Mirror
 		for i, c := range p.Status.Configuration {
 			if c.Type == "repository" {
@@ -214,11 +198,11 @@ func setPlatformDefaults(ctx context.Context, c client.Client, p *v1.Integration
 					}
 					mirrors = append(mirrors, mirror)
 				} else {
-					repository := maven.NewRepository(c.Value)
-					if repository.ID == "" {
-						repository.ID = fmt.Sprintf("repository-%03d", i)
+					repo := maven.NewRepository(c.Value)
+					if repo.ID == "" {
+						repo.ID = fmt.Sprintf("repository-%03d", i)
 					}
-					repositories = append(repositories, repository)
+					repositories = append(repositories, repo)
 				}
 			}
 		}
@@ -254,16 +238,28 @@ func setPlatformDefaults(ctx context.Context, c client.Client, p *v1.Integration
 			URI: repository.DefaultRemoteRepository,
 		})
 	}
+	setStatusAdditionalInfo(p)
 
 	if verbose {
 		log.Log.Infof("RuntimeVersion set to %s", p.Status.Build.RuntimeVersion)
 		log.Log.Infof("BaseImage set to %s", p.Status.Build.BaseImage)
 		log.Log.Infof("LocalRepository set to %s", p.Status.Build.Maven.LocalRepository)
 		log.Log.Infof("Timeout set to %s", p.Status.Build.GetTimeout())
-		log.Log.Infof("Maven Timeout set to %s", p.Status.Build.Maven.GetTimeout().Duration)
 	}
 
 	return nil
+}
+
+func setStatusAdditionalInfo(platform *v1.IntegrationPlatform) {
+	platform.Status.Info = make(map[string]string)
+	if platform.Spec.Build.PublishStrategy == v1.IntegrationPlatformBuildPublishStrategyBuildah {
+		platform.Status.Info["buildahVersion"] = defaults.BuildahVersion
+	} else if platform.Spec.Build.PublishStrategy == v1.IntegrationPlatformBuildPublishStrategyKaniko {
+		platform.Status.Info["kanikoVersion"] = defaults.KanikoVersion
+	}
+	platform.Status.Info["goVersion"] = runtime.Version()
+	platform.Status.Info["goOS"] = runtime.GOOS
+	platform.Status.Info["gitCommit"] = defaults.GitCommit
 }
 
 func createDefaultMavenSettingsConfigMap(ctx context.Context, client client.Client, p *v1.IntegrationPlatform, settings maven.Settings) error {

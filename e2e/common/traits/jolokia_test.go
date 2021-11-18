@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 // To enable compilation of this file in Goland, go to "Settings -> Go -> Vendoring & Build Tags -> Custom Tags" and add "integration"
@@ -27,10 +28,10 @@ import (
 
 	. "github.com/onsi/gomega"
 
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 
 	. "github.com/apache/camel-k/e2e/support"
-	camelv1 "github.com/apache/camel-k/pkg/apis/camel/v1"
+	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 )
 
 func TestJolokiaTrait(t *testing.T) {
@@ -43,8 +44,8 @@ func TestJolokiaTrait(t *testing.T) {
 				"-t", "jolokia.use-ssl-client-authentication=false",
 				"-t", "jolokia.protocol=http",
 				"-t", "jolokia.extended-client-check=false").Execute()).To(Succeed())
-			Eventually(IntegrationPodPhase(ns, "java"), TestTimeoutLong).Should(Equal(v1.PodRunning))
-			Eventually(IntegrationCondition(ns, "java", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
+			Eventually(IntegrationPodPhase(ns, "java"), TestTimeoutLong).Should(Equal(corev1.PodRunning))
+			Eventually(IntegrationConditionStatus(ns, "java", v1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(corev1.ConditionTrue))
 			Eventually(IntegrationLogs(ns, "java"), TestTimeoutShort).Should(ContainSubstring("Magicstring!"))
 
 			pod := IntegrationPod(ns, "java")

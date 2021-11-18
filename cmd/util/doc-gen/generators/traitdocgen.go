@@ -18,7 +18,6 @@ limitations under the License.
 package generators
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -53,9 +52,7 @@ const (
 	adocNavMarkerEnd   = adocCommonMarkerEnd + " (trait-nav)"
 )
 
-var (
-	tagTraitID = regexp.MustCompile(fmt.Sprintf("%s=([a-z0-9-]+)", regexp.QuoteMeta(tagTrait)))
-)
+var tagTraitID = regexp.MustCompile(fmt.Sprintf("%s=([a-z0-9-]+)", regexp.QuoteMeta(tagTrait)))
 
 // traitDocGen produces documentation about traits
 type traitDocGen struct {
@@ -64,7 +61,6 @@ type traitDocGen struct {
 	generatedTraitFiles []string
 }
 
-// NewTraitDocGen --
 func NewTraitDocGen(arguments *args.GeneratorArgs) generator.Generator {
 	return &traitDocGen{
 		DefaultGen: generator.DefaultGen{},
@@ -199,23 +195,26 @@ func writeMembers(t *types.Type, traitID string, content *[]string) {
 	res := append([]string(nil), *content...)
 	for _, m := range t.Members {
 		prop := reflect.StructTag(m.Tags).Get("property")
-		if prop != "" {
-			if strings.Contains(prop, "squash") {
-				writeMembers(m.Type, traitID, &res)
-			} else {
-				res = append(res, "| "+traitID+"."+prop)
-				res = append(res, "| "+strings.TrimPrefix(m.Type.Name.Name, "*"))
-				first := true
-				for _, l := range filterOutTagsAndComments(m.CommentLines) {
-					if first {
-						res = append(res, "| "+l)
-						first = false
-					} else {
-						res = append(res, l)
-					}
+		if prop == "" {
+			continue
+		}
+
+		if strings.Contains(prop, "squash") {
+			writeMembers(m.Type, traitID, &res)
+		} else {
+			res = append(res, "| "+traitID+"."+prop)
+			res = append(res, "| "+strings.TrimPrefix(m.Type.Name.Name, "*"))
+			first := true
+			for _, l := range filterOutTagsAndComments(m.CommentLines) {
+				escapedComment := escapeASCIIDoc(l)
+				if first {
+					res = append(res, "| "+escapedComment)
+					first = false
+				} else {
+					res = append(res, escapedComment)
 				}
-				res = append(res, "")
 			}
+			res = append(res, "")
 		}
 	}
 	*content = res
@@ -245,6 +244,11 @@ func filterOutTagsAndComments(comments []string) []string {
 	return res
 }
 
+// escapeAsciiDoc is in charge to escape those chars used for formatting purposes
+func escapeASCIIDoc(text string) string {
+	return strings.ReplaceAll(text, "|", "\\|")
+}
+
 func split(doc []string, startMarker, endMarker string) (pre []string, post []string) {
 	if len(doc) == 0 {
 		return nil, nil
@@ -271,7 +275,7 @@ func split(doc []string, startMarker, endMarker string) (pre []string, post []st
 }
 
 func readFile(filename string) (file *os.File, content []string, err error) {
-	if file, err = os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0777); err != nil {
+	if file, err = os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0o777); err != nil {
 		return file, content, err
 	}
 
@@ -304,19 +308,13 @@ func writeFile(file *os.File, content []string) error {
 }
 
 func isPlatformTrait(traitID string) bool {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	catalog := trait.NewCatalog(ctx, nil)
+	catalog := trait.NewCatalog(nil)
 	t := catalog.GetTrait(traitID)
 	return t.IsPlatformTrait()
 }
 
 func determineProfiles(traitID string) (profiles []string) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	catalog := trait.NewCatalog(ctx, nil)
+	catalog := trait.NewCatalog(nil)
 	for _, p := range v1.AllTraitProfiles {
 		traits := catalog.TraitsForProfile(p)
 		for _, t := range traits {

@@ -29,6 +29,7 @@ import (
 	"github.com/apache/camel-k/pkg/client"
 	"github.com/apache/camel-k/pkg/platform"
 	"github.com/apache/camel-k/pkg/util/kubernetes"
+	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func Apply(ctx context.Context, c client.Client, integration *v1.Integration, kit *v1.IntegrationKit) (*Environment, error) {
@@ -37,7 +38,7 @@ func Apply(ctx context.Context, c client.Client, integration *v1.Integration, ki
 		return nil, err
 	}
 
-	catalog := NewCatalog(ctx, c)
+	catalog := NewCatalog(c)
 
 	// set the catalog
 	environment.Catalog = catalog
@@ -64,14 +65,14 @@ func newEnvironment(ctx context.Context, c client.Client, integration *v1.Integr
 		return nil, errors.New("neither integration nor kit are set")
 	}
 
-	namespace := ""
+	var obj k8sclient.Object
 	if integration != nil {
-		namespace = integration.Namespace
+		obj = integration
 	} else if kit != nil {
-		namespace = kit.Namespace
+		obj = kit
 	}
 
-	pl, err := platform.GetCurrent(ctx, c, namespace)
+	pl, err := platform.GetForResource(ctx, c, obj)
 	if err != nil && !k8serrors.IsNotFound(err) {
 		return nil, err
 	}
@@ -84,7 +85,7 @@ func newEnvironment(ctx context.Context, c client.Client, integration *v1.Integr
 	}
 
 	env := Environment{
-		C:                     ctx,
+		Ctx:                   ctx,
 		Platform:              pl,
 		Client:                c,
 		IntegrationKit:        kit,

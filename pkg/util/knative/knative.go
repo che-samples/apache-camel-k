@@ -31,12 +31,11 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 
-	eventing "knative.dev/eventing/pkg/apis/eventing/v1beta1"
-	messaging "knative.dev/eventing/pkg/apis/messaging/v1beta1"
-	sources "knative.dev/eventing/pkg/apis/sources/v1alpha2"
+	eventing "knative.dev/eventing/pkg/apis/eventing/v1"
+	messaging "knative.dev/eventing/pkg/apis/messaging/v1"
+	sources "knative.dev/eventing/pkg/apis/sources/v1"
 	"knative.dev/pkg/apis/duck"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
-	duckv1alpha1 "knative.dev/pkg/apis/duck/v1alpha1"
 	"knative.dev/pkg/tracker"
 	serving "knative.dev/serving/pkg/apis/serving/v1"
 
@@ -44,7 +43,6 @@ import (
 	util "github.com/apache/camel-k/pkg/util/kubernetes"
 )
 
-// CreateSubscription ---
 func CreateSubscription(channelReference corev1.ObjectReference, serviceName string, path string) *messaging.Subscription {
 	return &messaging.Subscription{
 		TypeMeta: metav1.TypeMeta{
@@ -56,7 +54,7 @@ func CreateSubscription(channelReference corev1.ObjectReference, serviceName str
 			Name:      channelReference.Name + "-" + serviceName,
 		},
 		Spec: messaging.SubscriptionSpec{
-			Channel: corev1.ObjectReference{
+			Channel: duckv1.KReference{
 				APIVersion: channelReference.GroupVersionKind().GroupVersion().String(),
 				Kind:       channelReference.Kind,
 				Name:       channelReference.Name,
@@ -75,7 +73,6 @@ func CreateSubscription(channelReference corev1.ObjectReference, serviceName str
 	}
 }
 
-// CreateTrigger ---
 func CreateTrigger(brokerReference corev1.ObjectReference, serviceName string, eventType string, path string) *eventing.Trigger {
 	nameSuffix := ""
 	var attributes map[string]string
@@ -113,7 +110,6 @@ func CreateTrigger(brokerReference corev1.ObjectReference, serviceName string, e
 	}
 }
 
-// CreateSinkBinding ---
 func CreateSinkBinding(source corev1.ObjectReference, target corev1.ObjectReference) *sources.SinkBinding {
 	return &sources.SinkBinding{
 		TypeMeta: metav1.TypeMeta{
@@ -125,7 +121,7 @@ func CreateSinkBinding(source corev1.ObjectReference, target corev1.ObjectRefere
 			Name:      source.Name,
 		},
 		Spec: sources.SinkBindingSpec{
-			BindingSpec: duckv1alpha1.BindingSpec{
+			BindingSpec: duckv1.BindingSpec{
 				Subject: tracker.Reference{
 					APIVersion: source.APIVersion,
 					Kind:       source.Kind,
@@ -197,7 +193,7 @@ func getSinkURI(ctx context.Context, c client.Client, sink *corev1.ObjectReferen
 	t := duckv1.AddressableType{}
 	err = duck.FromUnstructured(u, &t)
 	if err != nil {
-		return "", fmt.Errorf("failed to deserialize sink %s: %v", objIdentifier, err)
+		return "", fmt.Errorf("failed to deserialize sink %s: %w", objIdentifier, err)
 	}
 
 	if t.Status.Address == nil || t.Status.Address.URL == nil {

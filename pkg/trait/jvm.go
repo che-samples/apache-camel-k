@@ -54,23 +54,35 @@ type jvmTrait struct {
 	DebugAddress string `property:"debug-address" json:"debugAddress,omitempty"`
 	// A list of JVM options
 	Options []string `property:"options" json:"options,omitempty"`
+	// Additional JVM classpath (use `Linux` classpath separator)
+	Classpath string `property:"classpath" json:"classpath,omitempty"`
 }
 
 func newJvmTrait() Trait {
 	return &jvmTrait{
 		BaseTrait:    NewBaseTrait("jvm", 2000),
 		DebugAddress: "*:5005",
-		PrintCommand: util.BoolP(true),
+		PrintCommand: BoolP(true),
 	}
 }
 
 func (t *jvmTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		return false, nil
 	}
 
-	return e.InPhase(v1.IntegrationKitPhaseReady, v1.IntegrationPhaseDeploying) ||
-		e.InPhase(v1.IntegrationKitPhaseReady, v1.IntegrationPhaseRunning), nil
+	if !e.IntegrationKitInPhase(v1.IntegrationKitPhaseReady) || !e.IntegrationInRunningPhases() {
+		return false, nil
+	}
+
+	if trait := e.Catalog.GetTrait(quarkusTraitID); trait != nil {
+		// The JVM trait must be disabled in case the current IntegrationKit corresponds to a native build
+		if quarkus, ok := trait.(*quarkusTrait); ok && IsNilOrTrue(quarkus.Enabled) && quarkus.isNativeIntegration(e) {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 func (t *jvmTrait) Apply(e *Environment) error {
@@ -80,10 +92,10 @@ func (t *jvmTrait) Apply(e *Environment) error {
 		name := e.Integration.Status.IntegrationKit.Name
 		ns := e.Integration.GetIntegrationKitNamespace(e.Platform)
 		k := v1.NewIntegrationKit(ns, name)
-		if err := t.Client.Get(t.Ctx, ctrl.ObjectKeyFromObject(&k), &k); err != nil {
+		if err := t.Client.Get(e.Ctx, ctrl.ObjectKeyFromObject(k), k); err != nil {
 			return errors.Wrapf(err, "unable to find integration kit %s/%s, %s", ns, name, err)
 		}
-		kit = &k
+		kit = k
 	}
 
 	if kit == nil {
@@ -95,17 +107,21 @@ func (t *jvmTrait) Apply(e *Environment) error {
 
 	classpath := strset.New()
 
-	classpath.Add(resourcesMountPath)
 	classpath.Add("./resources")
+	classpath.Add(configResourcesMountPath)
+	classpath.Add(resourcesDefaultMountPath)
+	if t.Classpath != "" {
+		classpath.Add(strings.Split(t.Classpath, ":")...)
+	}
 
 	for _, artifact := range kit.Status.Artifacts {
 		classpath.Add(artifact.Target)
 	}
 
-	if kit.Labels["camel.apache.org/kit.type"] == v1.IntegrationKitTypeExternal {
+	if kit.Labels[v1.IntegrationKitTypeLabel] == v1.IntegrationKitTypeExternal {
 		// In case of an external created kit, we do not have any information about
-		// the classpath so we assume the all jars in /deployments/dependencies/ have
-		// to be taken into account
+		// the classpath, so we assume the all jars in /deployments/dependencies/ have
+		// to be taken into account.
 		dependencies := path.Join(builder.DeploymentDir, builder.DependenciesDir)
 		classpath.Add(
 			dependencies+"/*",
@@ -116,7 +132,7 @@ func (t *jvmTrait) Apply(e *Environment) error {
 		)
 	}
 
-	container := e.getIntegrationContainer()
+	container := e.GetIntegrationContainer()
 	if container == nil {
 		return nil
 	}
@@ -126,9 +142,9 @@ func (t *jvmTrait) Apply(e *Environment) error {
 	args := container.Args
 
 	// Remote debugging
-	if util.IsTrue(t.Debug) {
+	if IsTrue(t.Debug) {
 		suspend := "n"
-		if util.IsTrue(t.DebugSuspend) {
+		if IsTrue(t.DebugSuspend) {
 			suspend = "y"
 		}
 		args = append(args,
@@ -178,7 +194,7 @@ func (t *jvmTrait) Apply(e *Environment) error {
 	args = append(args, "-cp", strings.Join(items, ":"))
 	args = append(args, e.CamelCatalog.Runtime.ApplicationClass)
 
-	if util.IsNilOrTrue(t.PrintCommand) {
+	if IsNilOrTrue(t.PrintCommand) {
 		args = append([]string{"exec", "java"}, args...)
 		container.Command = []string{"/bin/sh", "-c"}
 		cmd := strings.Join(args, " ")

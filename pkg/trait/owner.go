@@ -20,6 +20,7 @@ package trait
 import (
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	serving "knative.dev/serving/pkg/apis/serving/v1"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
@@ -44,7 +45,7 @@ func newOwnerTrait() Trait {
 }
 
 func (t *ownerTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		return false, nil
 	}
 
@@ -52,7 +53,7 @@ func (t *ownerTrait) Configure(e *Environment) (bool, error) {
 		return false, nil
 	}
 
-	return e.IntegrationInPhase(v1.IntegrationPhaseInitialization, v1.IntegrationPhaseDeploying, v1.IntegrationPhaseRunning), nil
+	return e.IntegrationInPhase(v1.IntegrationPhaseInitialization) || e.IntegrationInRunningPhases(), nil
 }
 
 func (t *ownerTrait) Apply(e *Environment) error {
@@ -78,17 +79,22 @@ func (t *ownerTrait) Apply(e *Environment) error {
 	}
 
 	e.Resources.VisitMetaObject(func(res metav1.Object) {
-		references := []metav1.OwnerReference{
-			{
-				APIVersion:         e.Integration.APIVersion,
-				Kind:               e.Integration.Kind,
-				Name:               e.Integration.Name,
-				UID:                e.Integration.UID,
-				Controller:         &controller,
-				BlockOwnerDeletion: &blockOwnerDeletion,
-			},
+		// Cross-namespace references are forbidden and also asynchronously refused
+		// by the api server (sometimes no error is thrown but the resource is not created).
+		// Ref: https://github.com/kubernetes/kubernetes/issues/65200
+		if res.GetNamespace() == "" || res.GetNamespace() == e.Integration.Namespace {
+			references := []metav1.OwnerReference{
+				{
+					APIVersion:         e.Integration.APIVersion,
+					Kind:               e.Integration.Kind,
+					Name:               e.Integration.Name,
+					UID:                e.Integration.UID,
+					Controller:         &controller,
+					BlockOwnerDeletion: &blockOwnerDeletion,
+				},
+			}
+			res.SetOwnerReferences(references)
 		}
-		res.SetOwnerReferences(references)
 
 		// Transfer annotations
 		t.propagateLabelAndAnnotations(res, targetLabels, targetAnnotations)

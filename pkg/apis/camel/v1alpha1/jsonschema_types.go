@@ -123,6 +123,18 @@ func (m *RawMessage) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// String returns a string representation of RawMessage
+func (m *RawMessage) String() string {
+	if m == nil {
+		return ""
+	}
+	b, err := m.MarshalJSON()
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 var _ json.Marshaler = (*RawMessage)(nil)
 var _ json.Unmarshaler = (*RawMessage)(nil)
 
@@ -131,6 +143,6 @@ type JSONSchemaURL string
 
 // ExternalDocumentation allows referencing an external resource for extended documentation.
 type ExternalDocumentation struct {
-	Description string `json:"description,omitempty""`
+	Description string `json:"description,omitempty"`
 	URL         string `json:"url,omitempty"`
 }

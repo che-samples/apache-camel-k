@@ -25,6 +25,7 @@ import (
 	"github.com/apache/camel-k/pkg/client"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -100,6 +101,10 @@ func (o *resetCmdOptions) deleteAllIntegrations(c client.Client) (int, error) {
 	}
 	for _, i := range list.Items {
 		it := i
+		if isIntegrationOwned(it) {
+			// Deleting it directly is ineffective, deleting the controller will delete it
+			continue
+		}
 		if err := c.Delete(o.Context, &it); err != nil {
 			return 0, errors.Wrap(err, fmt.Sprintf("could not delete integration %s from namespace %s", it.Name, it.Namespace))
 		}
@@ -141,7 +146,7 @@ func (o *resetCmdOptions) resetIntegrationPlatform(c client.Client) error {
 		return errors.Wrap(err, fmt.Sprintf("could not retrieve integration platform from namespace %s", o.Namespace))
 	}
 	if len(list.Items) > 1 {
-		return errors.New(fmt.Sprintf("expected 1 integration platform in the namespace, found: %d", len(list.Items)))
+		return fmt.Errorf("expected 1 integration platform in the namespace, found: %d", len(list.Items))
 	} else if len(list.Items) == 0 {
 		return errors.New("no integration platforms found in the namespace: run \"kamel install\" to install the platform")
 	}
@@ -149,4 +154,17 @@ func (o *resetCmdOptions) resetIntegrationPlatform(c client.Client) error {
 	// Let's reset the status
 	platform.Status = v1.IntegrationPlatformStatus{}
 	return c.Status().Update(o.Context, &platform)
+}
+
+func isIntegrationOwned(it v1.Integration) bool {
+	for _, ref := range it.OwnerReferences {
+		gv, err := schema.ParseGroupVersion(ref.APIVersion)
+		if err != nil {
+			continue
+		}
+		if gv.Group == v1.SchemeGroupVersion.Group && ref.BlockOwnerDeletion != nil && *ref.BlockOwnerDeletion {
+			return true
+		}
+	}
+	return false
 }

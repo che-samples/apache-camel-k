@@ -18,17 +18,18 @@ limitations under the License.
 package trait
 
 import (
-	"context"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 	"github.com/apache/camel-k/pkg/util/camel"
 	"github.com/apache/camel-k/pkg/util/gzip"
 	"github.com/apache/camel-k/pkg/util/kubernetes"
-	"github.com/stretchr/testify/assert"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"github.com/apache/camel-k/pkg/util/test"
 )
 
@@ -41,7 +42,7 @@ func TestServiceWithDefaults(t *testing.T) {
 	catalog, err := camel.DefaultCatalog()
 	assert.Nil(t, err)
 
-	traitCatalog := NewCatalog(context.TODO(), nil)
+	traitCatalog := NewCatalog(nil)
 
 	compressedRoute, err := gzip.CompressBase64([]byte(`from("netty-http:test").log("hello")`))
 	assert.NoError(t, err)
@@ -87,7 +88,7 @@ func TestServiceWithDefaults(t *testing.T) {
 				Cluster: v1.IntegrationPlatformClusterOpenShift,
 				Build: v1.IntegrationPlatformBuildSpec{
 					PublishStrategy: v1.IntegrationPlatformBuildPublishStrategyS2I,
-					Registry:        v1.IntegrationPlatformRegistrySpec{Address: "registry"},
+					Registry:        v1.RegistrySpec{Address: "registry"},
 				},
 			},
 		},
@@ -130,7 +131,7 @@ func TestService(t *testing.T) {
 	catalog, err := camel.DefaultCatalog()
 	assert.Nil(t, err)
 
-	traitCatalog := NewCatalog(context.TODO(), nil)
+	traitCatalog := NewCatalog(nil)
 
 	compressedRoute, err := gzip.CompressBase64([]byte(`from("netty-http:test").log("hello")`))
 	assert.NoError(t, err)
@@ -184,7 +185,7 @@ func TestService(t *testing.T) {
 				Cluster: v1.IntegrationPlatformClusterOpenShift,
 				Build: v1.IntegrationPlatformBuildSpec{
 					PublishStrategy: v1.IntegrationPlatformBuildPublishStrategyS2I,
-					Registry:        v1.IntegrationPlatformRegistrySpec{Address: "registry"},
+					Registry:        v1.RegistrySpec{Address: "registry"},
 				},
 			},
 		},
@@ -227,7 +228,7 @@ func TestServiceWithCustomContainerName(t *testing.T) {
 	catalog, err := camel.DefaultCatalog()
 	assert.Nil(t, err)
 
-	traitCatalog := NewCatalog(context.TODO(), nil)
+	traitCatalog := NewCatalog(nil)
 
 	environment := Environment{
 		CamelCatalog: catalog,
@@ -263,7 +264,7 @@ func TestServiceWithCustomContainerName(t *testing.T) {
 				Cluster: v1.IntegrationPlatformClusterOpenShift,
 				Build: v1.IntegrationPlatformBuildSpec{
 					PublishStrategy: v1.IntegrationPlatformBuildPublishStrategyS2I,
-					Registry:        v1.IntegrationPlatformRegistrySpec{Address: "registry"},
+					Registry:        v1.RegistrySpec{Address: "registry"},
 				},
 			},
 		},
@@ -298,7 +299,7 @@ func TestServiceWithNodePort(t *testing.T) {
 	catalog, err := camel.DefaultCatalog()
 	assert.Nil(t, err)
 
-	traitCatalog := NewCatalog(context.TODO(), nil)
+	traitCatalog := NewCatalog(nil)
 
 	compressedRoute, err := gzip.CompressBase64([]byte(`from("netty-http:test").log("hello")`))
 	assert.NoError(t, err)
@@ -345,7 +346,7 @@ func TestServiceWithNodePort(t *testing.T) {
 				Cluster: v1.IntegrationPlatformClusterOpenShift,
 				Build: v1.IntegrationPlatformBuildSpec{
 					PublishStrategy: v1.IntegrationPlatformBuildPublishStrategyS2I,
-					Registry:        v1.IntegrationPlatformRegistrySpec{Address: "registry"},
+					Registry:        v1.RegistrySpec{Address: "registry"},
 				},
 			},
 		},

@@ -22,16 +22,16 @@ import (
 	"fmt"
 	"path"
 	"sort"
-	"strconv"
 	"strings"
+
+	"github.com/pkg/errors"
 
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/api/batch/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	serving "knative.dev/serving/pkg/apis/serving/v1"
 
-	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
+	serving "knative.dev/serving/pkg/apis/serving/v1"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 	"github.com/apache/camel-k/pkg/client"
@@ -40,19 +40,23 @@ import (
 	"github.com/apache/camel-k/pkg/util/camel"
 	"github.com/apache/camel-k/pkg/util/kubernetes"
 	"github.com/apache/camel-k/pkg/util/log"
+	"github.com/apache/camel-k/pkg/util/property"
 )
 
-// True --
-const True = "true"
+const (
+	True  = "true"
+	False = "false"
+)
 
 var (
-	basePath                 = "/etc/camel"
-	confDPath                = path.Join(basePath, "conf.d")
-	sourcesMountPath         = path.Join(basePath, "sources")
-	resourcesMountPath       = path.Join(basePath, "resources")
-	configMapsMountPath      = path.Join(confDPath, "_configmaps")
-	secretsMountPath         = path.Join(confDPath, "_secrets")
-	serviceBindingsMountPath = path.Join(confDPath, "_servicebindings")
+	basePath                  = "/etc/camel"
+	confDPath                 = path.Join(basePath, "conf.d")
+	sourcesMountPath          = path.Join(basePath, "sources")
+	resourcesDefaultMountPath = path.Join(basePath, "resources")
+	configResourcesMountPath  = path.Join(confDPath, "_resources")
+	configConfigmapsMountPath = path.Join(confDPath, "_configmaps")
+	configSecretsMountPath    = path.Join(confDPath, "_secrets")
+	serviceBindingsMountPath  = path.Join(confDPath, "_servicebindings")
 )
 
 // Identifiable represent an identifiable type
@@ -67,9 +71,6 @@ type ID string
 type Trait interface {
 	Identifiable
 	client.Injectable
-
-	// InjectContext to inject a context
-	InjectContext(context.Context)
 
 	// Configure the trait
 	Configure(environment *Environment) (bool, error)
@@ -93,6 +94,15 @@ type Trait interface {
 	Order() int
 }
 
+type Comparable interface {
+	Matches(Trait) bool
+}
+
+type ComparableTrait interface {
+	Trait
+	Comparable
+}
+
 // A list of named orders, useful for correctly binding addons
 const (
 	// TraitOrderBeforeControllerCreation can be used to inject configuration such as properties and environment variables
@@ -106,9 +116,6 @@ const (
 	TraitOrderPostProcessResources = 2450
 )
 
-/* Base trait */
-
-// NewBaseTrait --
 func NewBaseTrait(id string, order int) BaseTrait {
 	return BaseTrait{
 		TraitID:        ID(id),
@@ -121,11 +128,10 @@ func NewBaseTrait(id string, order int) BaseTrait {
 type BaseTrait struct {
 	TraitID ID `json:"-"`
 	// Can be used to enable or disable a trait. All traits share this common property.
-	Enabled        *bool           `property:"enabled" json:"enabled,omitempty"`
-	Client         client.Client   `json:"-"`
-	Ctx            context.Context `json:"-"`
-	ExecutionOrder int             `json:"-"`
-	L              log.Logger      `json:"-"`
+	Enabled        *bool         `property:"enabled" json:"enabled,omitempty"`
+	Client         client.Client `json:"-"`
+	ExecutionOrder int           `json:"-"`
+	L              log.Logger    `json:"-"`
 }
 
 // ID returns the identifier of the trait
@@ -136,11 +142,6 @@ func (trait *BaseTrait) ID() ID {
 // InjectClient implements client.ClientInject and allows to inject a client into the trait
 func (trait *BaseTrait) InjectClient(c client.Client) {
 	trait.Client = c
-}
-
-// InjectContext allows to inject a context into the trait
-func (trait *BaseTrait) InjectContext(ctx context.Context) {
-	trait.Ctx = ctx
 }
 
 // InfluencesKit determines if the trait has any influence on Integration Kits
@@ -169,8 +170,6 @@ func (trait *BaseTrait) Order() int {
 	return trait.ExecutionOrder
 }
 
-/* ControllerStrategySelector */
-
 // ControllerStrategySelector is the interface for traits that can determine the kind of controller that will run the integration.
 type ControllerStrategySelector interface {
 	// SelectControllerStrategy tells if the trait with current configuration can select a specific controller to use
@@ -179,18 +178,24 @@ type ControllerStrategySelector interface {
 	ControllerStrategySelectorOrder() int
 }
 
-/* Environment */
-
-// A Environment provides the context where the trait is executed
+// An Environment provides the context for the execution of the traits
 type Environment struct {
-	CamelCatalog          *camel.RuntimeCatalog
-	RuntimeVersion        string
-	Catalog               *Catalog
-	C                     context.Context
-	Client                client.Client
-	Platform              *v1.IntegrationPlatform
-	IntegrationKit        *v1.IntegrationKit
-	Integration           *v1.Integration
+	CamelCatalog   *camel.RuntimeCatalog
+	RuntimeVersion string
+	Catalog        *Catalog
+	// The Go standard context for the traits execution
+	Ctx context.Context
+	// The client to the API server
+	Client client.Client
+	// The active Platform
+	Platform *v1.IntegrationPlatform
+	// The current Integration
+	Integration *v1.Integration
+	// The IntegrationKit associated to the Integration
+	IntegrationKit *v1.IntegrationKit
+	// The IntegrationKits to be created for the Integration
+	IntegrationKits []v1.IntegrationKit
+	// The resources owned by the Integration that are applied to the API server
 	Resources             *kubernetes.Collection
 	PostActions           []func(*Environment) error
 	PostStepProcessors    []func(*Environment) error
@@ -201,7 +206,7 @@ type Environment struct {
 	EnvVars               []corev1.EnvVar
 	ApplicationProperties map[string]string
 	Interceptors          []string
-	ServiceBindings       map[string]string
+	ServiceBindingSecret  string
 }
 
 // ControllerStrategy is used to determine the kind of controller that needs to be created for the integration
@@ -216,7 +221,6 @@ const (
 	DefaultControllerStrategy = ControllerStrategyDeployment
 )
 
-// GetTrait --
 func (e *Environment) GetTrait(id ID) Trait {
 	for _, t := range e.ExecutedTraits {
 		if t.ID() == id {
@@ -227,7 +231,6 @@ func (e *Environment) GetTrait(id ID) Trait {
 	return nil
 }
 
-// IntegrationInPhase --
 func (e *Environment) IntegrationInPhase(phases ...v1.IntegrationPhase) bool {
 	if e.Integration == nil {
 		return false
@@ -242,7 +245,10 @@ func (e *Environment) IntegrationInPhase(phases ...v1.IntegrationPhase) bool {
 	return false
 }
 
-// IntegrationKitInPhase --
+func (e *Environment) IntegrationInRunningPhases() bool {
+	return e.IntegrationInPhase(v1.IntegrationPhaseDeploying, v1.IntegrationPhaseRunning, v1.IntegrationPhaseError)
+}
+
 func (e *Environment) IntegrationKitInPhase(phases ...v1.IntegrationKitPhase) bool {
 	if e.IntegrationKit == nil {
 		return false
@@ -257,7 +263,6 @@ func (e *Environment) IntegrationKitInPhase(phases ...v1.IntegrationKitPhase) bo
 	return false
 }
 
-// InPhase --
 func (e *Environment) InPhase(c v1.IntegrationKitPhase, i v1.IntegrationPhase) bool {
 	return e.IntegrationKitInPhase(c) && e.IntegrationInPhase(i)
 }
@@ -342,7 +347,6 @@ func (e *Environment) GetIntegrationPodSpec() *corev1.PodSpec {
 	return nil
 }
 
-// DetermineCatalogNamespace --
 func (e *Environment) DetermineCatalogNamespace() string {
 	// Catalog is expected to be together with the platform
 	if e.Platform != nil && e.Platform.Namespace != "" {
@@ -363,12 +367,11 @@ func (e *Environment) DetermineCatalogNamespace() string {
 	return ""
 }
 
-func (e *Environment) computeApplicationProperties() *corev1.ConfigMap {
+func (e *Environment) computeApplicationProperties() (*corev1.ConfigMap, error) {
 	// application properties
-	applicationProperties := ""
-
-	for key, val := range e.ApplicationProperties {
-		applicationProperties += fmt.Sprintf("%s=%s\n", key, val)
+	applicationProperties, err := property.EncodePropertyFile(e.ApplicationProperties)
+	if err != nil {
+		return nil, errors.Wrapf(err, "could not compute application properties")
 	}
 
 	if applicationProperties != "" {
@@ -388,127 +391,10 @@ func (e *Environment) computeApplicationProperties() *corev1.ConfigMap {
 			Data: map[string]string{
 				"application.properties": applicationProperties,
 			},
-		}
+		}, nil
 	}
 
-	return nil
-}
-
-func (e *Environment) computeConfigMaps() []ctrl.Object {
-	sources := e.Integration.Sources()
-	maps := make([]ctrl.Object, 0, len(sources)+1)
-
-	// combine properties of integration with kit, integration
-	// properties have the priority
-	userProperties := ""
-
-	for _, prop := range e.collectConfigurationPairs("property") {
-		userProperties += fmt.Sprintf("%s=%s\n", prop.Name, prop.Value)
-	}
-
-	if userProperties != "" {
-		maps = append(
-			maps,
-			&corev1.ConfigMap{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "ConfigMap",
-					APIVersion: "v1",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      e.Integration.Name + "-user-properties",
-					Namespace: e.Integration.Namespace,
-					Labels: map[string]string{
-						v1.IntegrationLabel:                e.Integration.Name,
-						"camel.apache.org/properties.type": "user",
-					},
-				},
-				Data: map[string]string{
-					"application.properties": userProperties,
-				},
-			},
-		)
-	}
-
-	for i, s := range sources {
-		if s.ContentRef != "" {
-			continue
-		}
-
-		cm := corev1.ConfigMap{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "ConfigMap",
-				APIVersion: "v1",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-source-%03d", e.Integration.Name, i),
-				Namespace: e.Integration.Namespace,
-				Labels: map[string]string{
-					v1.IntegrationLabel: e.Integration.Name,
-				},
-				Annotations: map[string]string{
-					"camel.apache.org/source.language":    string(s.InferLanguage()),
-					"camel.apache.org/source.loader":      s.Loader,
-					"camel.apache.org/source.name":        s.Name,
-					"camel.apache.org/source.compression": strconv.FormatBool(s.Compression),
-				},
-			},
-			Data: map[string]string{
-				"content": s.Content,
-			},
-		}
-
-		maps = append(maps, &cm)
-	}
-
-	for i, r := range e.Integration.Spec.Resources {
-		if r.Type != v1.ResourceTypeData {
-			continue
-		}
-		if r.ContentRef != "" {
-			continue
-		}
-
-		cmKey := "content"
-		if r.ContentKey != "" {
-			cmKey = r.ContentKey
-		}
-
-		cm := corev1.ConfigMap{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "ConfigMap",
-				APIVersion: "v1",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-resource-%03d", e.Integration.Name, i),
-				Namespace: e.Integration.Namespace,
-				Labels: map[string]string{
-					"camel.apache.org/integration": e.Integration.Name,
-				},
-				Annotations: map[string]string{
-					"camel.apache.org/resource.name":        r.Name,
-					"camel.apache.org/resource.compression": strconv.FormatBool(r.Compression),
-				},
-			},
-		}
-
-		if r.ContentType != "" {
-			cm.Annotations["camel.apache.org/resource.content-type"] = r.ContentType
-		}
-
-		if r.RawContent != nil {
-			cm.BinaryData = map[string][]byte{
-				cmKey: r.RawContent,
-			}
-		} else {
-			cm.Data = map[string]string{
-				cmKey: r.Content,
-			}
-		}
-
-		maps = append(maps, &cm)
-	}
-
-	return maps
+	return nil, nil
 }
 
 func (e *Environment) addSourcesProperties() {
@@ -599,7 +485,7 @@ func (e *Environment) configureVolumesAndMounts(vols *[]corev1.Volume, mnts *[]c
 	}
 
 	for i, r := range e.Integration.Resources() {
-		if r.Type != v1.ResourceTypeData {
+		if r.Type == v1.ResourceTypeOpenAPI {
 			continue
 		}
 
@@ -607,7 +493,7 @@ func (e *Environment) configureVolumesAndMounts(vols *[]corev1.Volume, mnts *[]c
 		refName := fmt.Sprintf("i-resource-%03d", i)
 		resName := strings.TrimPrefix(r.Name, "/")
 		cmKey := "content"
-		resPath := path.Join(resourcesMountPath, resName)
+		resPath := getResourcePath(resName, r.Path, r.Type)
 
 		if r.ContentRef != "" {
 			cmName = r.ContentRef
@@ -688,23 +574,35 @@ func (e *Environment) configureVolumesAndMounts(vols *[]corev1.Volume, mnts *[]c
 	//
 	// Volumes :: Additional ConfigMaps
 	//
-	for _, cmName := range e.collectConfigurationValues("configmap") {
-		refName := kubernetes.SanitizeLabel(cmName)
+	for _, configmaps := range e.collectConfigurations("configmap") {
+		refName := kubernetes.SanitizeLabel(configmaps["value"])
 
-		*vols = append(*vols, corev1.Volume{
+		configmapVolume := corev1.Volume{
 			Name: refName,
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: cmName,
+						Name: configmaps["value"],
 					},
 				},
 			},
-		})
+		}
+
+		// Filter the items selected, if specified
+		if configmaps["resourceKey"] != "" {
+			configmapVolume.VolumeSource.ConfigMap.Items = []corev1.KeyToPath{
+				{
+					Key:  configmaps["resourceKey"],
+					Path: configmaps["resourceKey"],
+				},
+			}
+		}
+
+		*vols = append(*vols, configmapVolume)
 
 		*mnts = append(*mnts, corev1.VolumeMount{
 			Name:      refName,
-			MountPath: path.Join(configMapsMountPath, strings.ToLower(cmName)),
+			MountPath: getConfigmapMountPoint(configmaps["value"], configmaps["resourceMountPoint"], configmaps["resourceType"]),
 			ReadOnly:  true,
 		})
 	}
@@ -713,8 +611,9 @@ func (e *Environment) configureVolumesAndMounts(vols *[]corev1.Volume, mnts *[]c
 	// Volumes :: Additional Secrets
 	//
 	// append Service Binding secrets
-	for sb, secret := range e.ServiceBindings {
-		refName := kubernetes.SanitizeLabel(sb)
+	if len(e.ServiceBindingSecret) > 0 {
+		secret := e.ServiceBindingSecret
+		refName := kubernetes.SanitizeLabel(secret)
 
 		*vols = append(*vols, corev1.Volume{
 			Name: refName,
@@ -727,24 +626,37 @@ func (e *Environment) configureVolumesAndMounts(vols *[]corev1.Volume, mnts *[]c
 
 		*mnts = append(*mnts, corev1.VolumeMount{
 			Name:      refName,
-			MountPath: path.Join(serviceBindingsMountPath, strings.ToLower(sb)),
+			MountPath: path.Join(serviceBindingsMountPath, strings.ToLower(secret)),
 		})
 	}
-	for _, secretName := range e.collectConfigurationValues("secret") {
-		refName := kubernetes.SanitizeLabel(secretName)
 
-		*vols = append(*vols, corev1.Volume{
+	for _, secret := range e.collectConfigurations("secret") {
+		refName := kubernetes.SanitizeLabel(secret["value"])
+
+		secretVolume := corev1.Volume{
 			Name: refName,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: secretName,
+					SecretName: secret["value"],
 				},
 			},
-		})
+		}
+
+		// Filter the items selected, if specified
+		if secret["resourceKey"] != "" {
+			secretVolume.VolumeSource.Secret.Items = []corev1.KeyToPath{
+				{
+					Key:  secret["resourceKey"],
+					Path: secret["resourceKey"],
+				},
+			}
+		}
+
+		*vols = append(*vols, secretVolume)
 
 		*mnts = append(*mnts, corev1.VolumeMount{
 			Name:      refName,
-			MountPath: path.Join(secretsMountPath, strings.ToLower(secretName)),
+			MountPath: getSecretMountPoint(secret["value"], secret["resourceMountPoint"], secret["resourceType"]),
 			ReadOnly:  true,
 		})
 	}
@@ -779,6 +691,46 @@ func (e *Environment) configureVolumesAndMounts(vols *[]corev1.Volume, mnts *[]c
 	}
 }
 
+func getResourcePath(resourceName string, maybePath string, resourceType v1.ResourceType) string {
+	// If the path is specified, we'll return it
+	if maybePath != "" {
+		return maybePath
+	}
+	// otherwise return a default path, according to the resource type
+	if resourceType == v1.ResourceTypeData {
+		return path.Join(resourcesDefaultMountPath, resourceName)
+	}
+
+	// Default, config type
+	return path.Join(configResourcesMountPath, resourceName)
+}
+
+func getConfigmapMountPoint(resourceName string, maybeMountPoint string, resourceType string) string {
+	// If the mount point is specified, we'll return it
+	if maybeMountPoint != "" {
+		return maybeMountPoint
+	}
+	if resourceType == "data" {
+		return path.Join(resourcesDefaultMountPath, resourceName)
+	}
+
+	// Default, config type
+	return path.Join(configConfigmapsMountPath, resourceName)
+}
+
+func getSecretMountPoint(resourceName string, maybeMountPoint string, resourceType string) string {
+	// If the mount point is specified, we'll return it
+	if maybeMountPoint != "" {
+		return maybeMountPoint
+	}
+	if resourceType == "data" {
+		return path.Join(resourcesDefaultMountPath, resourceName)
+	}
+
+	// Default, config type
+	return path.Join(configSecretsMountPath, resourceName)
+}
+
 func (e *Environment) collectConfigurationValues(configurationType string) []string {
 	return collectConfigurationValues(configurationType, e.Platform, e.IntegrationKit, e.Integration)
 }
@@ -791,18 +743,26 @@ func (e *Environment) collectConfigurationPairs(configurationType string) []vari
 	return collectConfigurationPairs(configurationType, e.Platform, e.IntegrationKit, e.Integration)
 }
 
-func (e *Environment) getIntegrationContainer() *corev1.Container {
+func (e *Environment) collectConfigurations(configurationType string) []map[string]string {
+	return collectConfigurations(configurationType, e.Platform, e.IntegrationKit, e.Integration)
+}
+
+func (e *Environment) GetIntegrationContainerName() string {
 	containerName := defaultContainerName
 	dt := e.Catalog.GetTrait(containerTraitID)
 	if dt != nil {
 		containerName = dt.(*containerTrait).Name
 	}
+	return containerName
+}
 
+func (e *Environment) GetIntegrationContainer() *corev1.Container {
+	containerName := e.GetIntegrationContainerName()
 	return e.Resources.GetContainerByName(containerName)
 }
 
 func (e *Environment) getIntegrationContainerPort() *corev1.ContainerPort {
-	container := e.getIntegrationContainer()
+	container := e.GetIntegrationContainer()
 	if container == nil {
 		return nil
 	}
@@ -825,6 +785,7 @@ func (e *Environment) getIntegrationContainerPort() *corev1.ContainerPort {
 	return nil
 }
 
+// nolint: unused
 func (e *Environment) getAllInterceptors() []string {
 	res := make([]string, 0)
 	util.StringSliceUniqueConcat(&res, e.Interceptors)

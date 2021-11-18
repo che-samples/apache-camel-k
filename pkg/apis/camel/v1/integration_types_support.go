@@ -20,7 +20,6 @@ package v1
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,7 +27,6 @@ import (
 
 const IntegrationLabel = "camel.apache.org/integration"
 
-// NewIntegration --
 func NewIntegration(namespace string, name string) Integration {
 	return Integration{
 		TypeMeta: metav1.TypeMeta{
@@ -42,7 +40,6 @@ func NewIntegration(namespace string, name string) Integration {
 	}
 }
 
-// NewIntegrationList --
 func NewIntegrationList() IntegrationList {
 	return IntegrationList{
 		TypeMeta: metav1.TypeMeta{
@@ -52,7 +49,6 @@ func NewIntegrationList() IntegrationList {
 	}
 }
 
-// Sources return a new slice containing all the sources associated to the integration
 func (in *Integration) Initialize() {
 	profile := in.Status.Profile
 	if in.Spec.Profile != "" {
@@ -82,27 +78,22 @@ func (in *Integration) Resources() []ResourceSpec {
 	return resources
 }
 
-// AddSource --
 func (in *IntegrationSpec) AddSource(name string, content string, language Language) {
 	in.Sources = append(in.Sources, NewSourceSpec(name, content, language))
 }
 
-// AddSources --
 func (in *IntegrationSpec) AddSources(sources ...SourceSpec) {
 	in.Sources = append(in.Sources, sources...)
 }
 
-// AddResources --
 func (in *IntegrationSpec) AddResources(resources ...ResourceSpec) {
 	in.Resources = append(in.Resources, resources...)
 }
 
-// AddFlows --
 func (in *IntegrationSpec) AddFlows(flows ...Flow) {
 	in.Flows = append(in.Flows, flows...)
 }
 
-// AddConfiguration --
 func (in *IntegrationSpec) AddConfiguration(confType string, confValue string) {
 	in.Configuration = append(in.Configuration, ConfigurationSpec{
 		Type:  confType,
@@ -110,7 +101,18 @@ func (in *IntegrationSpec) AddConfiguration(confType string, confValue string) {
 	})
 }
 
-// AddDependency --
+// AddConfigurationAsResource will set a configuration specified with a resource type
+func (in *IntegrationSpec) AddConfigurationAsResource(
+	confType string, confValue string, resourceType string, resourceMountPoint string, resourceKey string) {
+	in.Configuration = append(in.Configuration, ConfigurationSpec{
+		Type:               confType,
+		Value:              confValue,
+		ResourceType:       resourceType,
+		ResourceMountPoint: resourceMountPoint,
+		ResourceKey:        resourceKey,
+	})
+}
+
 func (in *IntegrationSpec) AddDependency(dependency string) {
 	if in.Dependencies == nil {
 		in.Dependencies = make([]string, 0)
@@ -137,14 +139,20 @@ func (in *IntegrationSpec) GetConfigurationProperty(property string) string {
 		if confSpec.Type == "property" && strings.HasPrefix(confSpec.Value, property) {
 			splitConf := strings.Split(confSpec.Value, "=")
 			if len(splitConf) > 1 {
-				return splitConf[1]
+				return trimFirstLeadingSpace(splitConf[1])
 			}
 		}
 	}
 	return ""
 }
 
-// AddOrReplaceGeneratedResources --
+func trimFirstLeadingSpace(val string) string {
+	if strings.HasPrefix(val, " ") {
+		return val[1:]
+	}
+	return val
+}
+
 func (in *IntegrationStatus) AddOrReplaceGeneratedResources(resources ...ResourceSpec) {
 	newResources := make([]ResourceSpec, 0)
 	for _, resource := range resources {
@@ -164,7 +172,6 @@ func (in *IntegrationStatus) AddOrReplaceGeneratedResources(resources ...Resourc
 	in.GeneratedResources = append(in.GeneratedResources, newResources...)
 }
 
-// AddOrReplaceGeneratedSources --
 func (in *IntegrationStatus) AddOrReplaceGeneratedSources(sources ...SourceSpec) {
 	newSources := make([]SourceSpec, 0)
 	for _, source := range sources {
@@ -184,7 +191,6 @@ func (in *IntegrationStatus) AddOrReplaceGeneratedSources(sources ...SourceSpec)
 	in.GeneratedSources = append(in.GeneratedSources, newSources...)
 }
 
-// AddConfigurationsIfMissing --
 func (in *IntegrationStatus) AddConfigurationsIfMissing(configurations ...ConfigurationSpec) {
 	for _, config := range configurations {
 		alreadyPresent := false
@@ -200,7 +206,6 @@ func (in *IntegrationStatus) AddConfigurationsIfMissing(configurations ...Config
 	}
 }
 
-// Configurations --
 func (in *IntegrationSpec) Configurations() []ConfigurationSpec {
 	if in == nil {
 		return []ConfigurationSpec{}
@@ -209,7 +214,6 @@ func (in *IntegrationSpec) Configurations() []ConfigurationSpec {
 	return in.Configuration
 }
 
-// Configurations --
 func (in *IntegrationStatus) Configurations() []ConfigurationSpec {
 	if in == nil {
 		return []ConfigurationSpec{}
@@ -218,7 +222,6 @@ func (in *IntegrationStatus) Configurations() []ConfigurationSpec {
 	return in.Configuration
 }
 
-// Configurations --
 func (in *Integration) Configurations() []ConfigurationSpec {
 	if in == nil {
 		return []ConfigurationSpec{}
@@ -231,7 +234,6 @@ func (in *Integration) Configurations() []ConfigurationSpec {
 	return answer
 }
 
-// NewSourceSpec --
 func NewSourceSpec(name string, content string, language Language) SourceSpec {
 	return SourceSpec{
 		DataSpec: DataSpec{
@@ -242,7 +244,6 @@ func NewSourceSpec(name string, content string, language Language) SourceSpec {
 	}
 }
 
-// NewResourceSpec --
 func NewResourceSpec(name string, content string, destination string, resourceType ResourceType) ResourceSpec {
 	return ResourceSpec{
 		DataSpec: DataSpec{
@@ -266,7 +267,6 @@ func (in *SourceSpec) InferLanguage() Language {
 	return ""
 }
 
-// SetIntegrationPlatform --
 func (in *Integration) SetIntegrationPlatform(platform *IntegrationPlatform) {
 	cs := corev1.ConditionTrue
 
@@ -278,7 +278,6 @@ func (in *Integration) SetIntegrationPlatform(platform *IntegrationPlatform) {
 	in.Status.Platform = platform.Name
 }
 
-// SetIntegrationKit --
 func (in *Integration) SetIntegrationKit(kit *IntegrationKit) {
 	cs := corev1.ConditionTrue
 	message := kit.Name
@@ -296,10 +295,13 @@ func (in *Integration) SetIntegrationKit(kit *IntegrationKit) {
 		Namespace: kit.Namespace,
 		Name:      kit.Name,
 	}
-	in.Status.Image = kit.Status.Image
+	image := kit.Status.Image
+	if image == "" {
+		image = kit.Spec.Image
+	}
+	in.Status.Image = image
 }
 
-// GetIntegrationKitNamespace --
 func (in *Integration) GetIntegrationKitNamespace(p *IntegrationPlatform) string {
 	if in.Status.IntegrationKit != nil && in.Status.IntegrationKit.Namespace != "" {
 		return in.Status.IntegrationKit.Namespace
@@ -324,7 +326,6 @@ func (in *IntegrationStatus) GetCondition(condType IntegrationConditionType) *In
 	return nil
 }
 
-// SetCondition --
 func (in *IntegrationStatus) SetCondition(condType IntegrationConditionType, status corev1.ConditionStatus, reason string, message string) {
 	in.SetConditions(IntegrationCondition{
 		Type:    condType,
@@ -334,7 +335,6 @@ func (in *IntegrationStatus) SetCondition(condType IntegrationConditionType, sta
 	})
 }
 
-// SetErrorCondition --
 func (in *IntegrationStatus) SetErrorCondition(condType IntegrationConditionType, reason string, err error) {
 	in.SetConditions(IntegrationCondition{
 		Type:    condType,
@@ -350,12 +350,12 @@ func (in *IntegrationStatus) SetErrorCondition(condType IntegrationConditionType
 // reason then we are not going to update.
 func (in *IntegrationStatus) SetConditions(conditions ...IntegrationCondition) {
 	// Round to second precision, as meta.Time fields are marshalled in RFC3339 format
-	now := metav1.NewTime(time.Now().Round(time.Second))
+	now := metav1.Now().Rfc3339Copy()
 	for _, condition := range conditions {
 		currentCond := in.GetCondition(condition.Type)
 
-		if currentCond != nil && currentCond.Status == condition.Status && currentCond.Reason == condition.Reason {
-			return
+		if currentCond != nil && currentCond.Status == condition.Status && currentCond.Reason == condition.Reason && currentCond.Message == condition.Message {
+			break
 		}
 
 		if condition.LastUpdateTime.IsZero() {
@@ -376,7 +376,7 @@ func (in *IntegrationStatus) SetConditions(conditions ...IntegrationCondition) {
 				// Do not update LastTransitionTime if the status of the condition doesn't change
 				condition.LastTransitionTime = currentCond.LastTransitionTime
 			}
-			if !(currentCond.FirstTruthyTime != nil || currentCond.FirstTruthyTime.IsZero()) {
+			if currentCond.FirstTruthyTime != nil && !currentCond.FirstTruthyTime.IsZero() {
 				// Preserve FirstTruthyTime
 				condition.FirstTruthyTime = currentCond.FirstTruthyTime.DeepCopy()
 			}
@@ -401,7 +401,6 @@ func (in *IntegrationStatus) RemoveCondition(condType IntegrationConditionType) 
 
 var _ ResourceCondition = IntegrationCondition{}
 
-// GetConditions --
 func (in *IntegrationStatus) GetConditions() []ResourceCondition {
 	res := make([]ResourceCondition, 0, len(in.Conditions))
 	for _, c := range in.Conditions {
@@ -410,32 +409,26 @@ func (in *IntegrationStatus) GetConditions() []ResourceCondition {
 	return res
 }
 
-// GetType --
 func (c IntegrationCondition) GetType() string {
 	return string(c.Type)
 }
 
-// GetStatus --
 func (c IntegrationCondition) GetStatus() corev1.ConditionStatus {
 	return c.Status
 }
 
-// GetLastUpdateTime --
 func (c IntegrationCondition) GetLastUpdateTime() metav1.Time {
 	return c.LastUpdateTime
 }
 
-// GetLastTransitionTime --
 func (c IntegrationCondition) GetLastTransitionTime() metav1.Time {
 	return c.LastTransitionTime
 }
 
-// GetReason --
 func (c IntegrationCondition) GetReason() string {
 	return c.Reason
 }
 
-// GetMessage --
 func (c IntegrationCondition) GetMessage() string {
 	return c.Message
 }

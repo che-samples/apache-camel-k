@@ -18,9 +18,13 @@ limitations under the License.
 package trait
 
 import (
+	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v2"
+
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 	"github.com/apache/camel-k/pkg/apis/camel/v1alpha1"
-	"gopkg.in/yaml.v2"
 )
 
 // The error-handler is a platform trait used to inject Error Handler source into the integration runtime.
@@ -34,7 +38,8 @@ type errorHandlerTrait struct {
 
 func newErrorHandlerTrait() Trait {
 	return &errorHandlerTrait{
-		BaseTrait: NewBaseTrait("error-handler", 500),
+		// NOTE: Must run before dependency trait
+		BaseTrait: NewBaseTrait("error-handler", 470),
 	}
 }
 
@@ -44,11 +49,11 @@ func (t *errorHandlerTrait) IsPlatformTrait() bool {
 }
 
 func (t *errorHandlerTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		return false, nil
 	}
 
-	if !e.IntegrationInPhase(v1.IntegrationPhaseInitialization, v1.IntegrationPhaseDeploying, v1.IntegrationPhaseRunning) {
+	if !e.IntegrationInPhase(v1.IntegrationPhaseInitialization) && !e.IntegrationInRunningPhases() {
 		return false, nil
 	}
 
@@ -61,9 +66,29 @@ func (t *errorHandlerTrait) Configure(e *Environment) (bool, error) {
 
 func (t *errorHandlerTrait) Apply(e *Environment) error {
 	if e.IntegrationInPhase(v1.IntegrationPhaseInitialization) {
+		// If the user configure directly the URI, we need to auto-discover the underlying component
+		// and add the related dependency
+		defaultErrorHandlerURI := e.Integration.Spec.GetConfigurationProperty(
+			fmt.Sprintf("%s.deadLetterUri", v1alpha1.ErrorHandlerAppPropertiesPrefix))
+		if defaultErrorHandlerURI != "" && !strings.HasPrefix(defaultErrorHandlerURI, "kamelet:") {
+			t.addErrorHandlerDependencies(e, defaultErrorHandlerURI)
+		}
+
 		return t.addErrorHandlerAsSource(e)
 	}
 	return nil
+}
+
+func (t *errorHandlerTrait) addErrorHandlerDependencies(e *Environment, uri string) {
+	candidateComp, scheme := e.CamelCatalog.DecodeComponent(uri)
+	if candidateComp != nil {
+		e.Integration.Spec.AddDependency(candidateComp.GetDependencyID())
+		if scheme != nil {
+			for _, dep := range candidateComp.GetProducerDependencyIDs(scheme.ID) {
+				e.Integration.Spec.AddDependency(dep)
+			}
+		}
+	}
 }
 
 func (t *errorHandlerTrait) addErrorHandlerAsSource(e *Environment) error {

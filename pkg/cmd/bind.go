@@ -31,6 +31,8 @@ import (
 	"github.com/spf13/cobra"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/cli-runtime/pkg/printers"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -47,32 +49,37 @@ func newCmdBind(rootCmdOptions *RootCmdOptions) (*cobra.Command, *bindCmdOptions
 			if err := options.validate(cmd, args); err != nil {
 				return err
 			}
-			if err := options.run(args); err != nil {
-				fmt.Println(err.Error())
+			if err := options.run(cmd, args); err != nil {
+				fmt.Fprintln(cmd.OutOrStdout(), err.Error())
 			}
 
 			return nil
 		},
 	}
 
+	cmd.Flags().StringArrayP("connect", "c", nil, "A ServiceBinding or Provisioned Service that the integration should bind to, specified as [[apigroup/]version:]kind:[namespace/]name")
+	cmd.Flags().String("error-handler", "", `Add error handler (none|log|dlc:<endpoint>|bean:<type>|ref:<registry-ref>). DLC endpoints are expected in the format "[[apigroup/]version:]kind:[namespace/]name", plain Camel URIs or Kamelet name.`)
 	cmd.Flags().String("name", "", "Name for the binding")
 	cmd.Flags().StringP("output", "o", "", "Output format. One of: json|yaml")
-	cmd.Flags().StringArrayP("property", "p", nil, `Add a binding property in the form of "source.<key>=<value>", "sink.<key>=<value>" or "step-<n>.<key>=<value>"`)
+	cmd.Flags().StringArrayP("property", "p", nil, `Add a binding property in the form of "source.<key>=<value>", "sink.<key>=<value>", "error-handler.<key>=<value>" or "step-<n>.<key>=<value>"`)
 	cmd.Flags().Bool("skip-checks", false, "Do not verify the binding for compliance with Kamelets and other Kubernetes resources")
-	cmd.Flags().StringArray("step", nil, `Add binding steps as Kubernetes resources, such as Kamelets. Endpoints are expected in the format "[[apigroup/]version:]kind:[namespace/]name" or plain Camel URIs.`)
+	cmd.Flags().StringArray("step", nil, `Add binding steps as Kubernetes resources. Endpoints are expected in the format "[[apigroup/]version:]kind:[namespace/]name", plain Camel URIs or Kamelet name.`)
 
 	return &cmd, &options
 }
 
 const (
-	sourceKey     = "source"
-	sinkKey       = "sink"
-	stepKeyPrefix = "step-"
+	sourceKey       = "source"
+	sinkKey         = "sink"
+	stepKeyPrefix   = "step-"
+	errorHandlerKey = "error-handler"
 )
 
 type bindCmdOptions struct {
 	*RootCmdOptions
+	ErrorHandler string   `mapstructure:"error-handler" yaml:",omitempty"`
 	Name         string   `mapstructure:"name" yaml:",omitempty"`
+	Connects     []string `mapstructure:"connects" yaml:",omitempty"`
 	OutputFormat string   `mapstructure:"output" yaml:",omitempty"`
 	Properties   []string `mapstructure:"properties" yaml:",omitempty"`
 	SkipChecks   bool     `mapstructure:"skip-checks" yaml:",omitempty"`
@@ -124,7 +131,7 @@ func (o *bindCmdOptions) validate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *bindCmdOptions) run(args []string) error {
+func (o *bindCmdOptions) run(cmd *cobra.Command, args []string) error {
 	source, err := o.decode(args[0], sourceKey)
 	if err != nil {
 		return err
@@ -148,6 +155,14 @@ func (o *bindCmdOptions) run(args []string) error {
 		},
 	}
 
+	if o.ErrorHandler != "" {
+		if errorHandler, err := o.parseErrorHandler(); err == nil {
+			binding.Spec.ErrorHandler = errorHandler
+		} else {
+			return err
+		}
+	}
+
 	if len(o.Steps) > 0 {
 		binding.Spec.Steps = make([]v1alpha1.Endpoint, 0)
 		for idx, stepDesc := range o.Steps {
@@ -160,32 +175,31 @@ func (o *bindCmdOptions) run(args []string) error {
 		}
 	}
 
-	switch o.OutputFormat {
-	case "":
-		// continue..
-	case "yaml":
-		data, err := kubernetes.ToYAML(&binding)
+	if len(o.Connects) > 0 {
+		trait := make(map[string]interface{})
+		trait["serviceBindings"] = o.Connects
+		specs := make(map[string]v1.TraitSpec)
+		data, err := json.Marshal(trait)
 		if err != nil {
 			return err
 		}
-		fmt.Print(string(data))
-		return nil
-
-	case "json":
-		data, err := kubernetes.ToJSON(&binding)
+		var spec v1.TraitSpec
+		err = json.Unmarshal(data, &spec.Configuration)
 		if err != nil {
 			return err
 		}
-		fmt.Print(string(data))
-		return nil
-
-	default:
-		return fmt.Errorf("invalid output format option '%s', should be one of: yaml|json", o.OutputFormat)
+		specs["service-binding"] = spec
+		binding.Spec.Integration = &v1.IntegrationSpec{}
+		binding.Spec.Integration.Traits = specs
 	}
 
 	client, err := o.GetCmdClient()
 	if err != nil {
 		return err
+	}
+
+	if o.OutputFormat != "" {
+		return showOutput(cmd, &binding, o.OutputFormat, client.GetScheme())
 	}
 
 	existed := false
@@ -204,6 +218,62 @@ func (o *bindCmdOptions) run(args []string) error {
 		fmt.Printf("kamelet binding \"%s\" updated\n", name)
 	}
 	return nil
+}
+
+func showOutput(cmd *cobra.Command, binding *v1alpha1.KameletBinding, outputFormat string, scheme *runtime.Scheme) error {
+	printer := printers.NewTypeSetter(scheme)
+	printer.Delegate = &kubernetes.CLIPrinter{
+		Format: outputFormat,
+	}
+	return printer.PrintObj(binding, cmd.OutOrStdout())
+}
+
+func (o *bindCmdOptions) parseErrorHandler() (*v1alpha1.ErrorHandlerSpec, error) {
+	errHandlMap := make(map[string]interface{})
+	errHandlType, errHandlValue, err := parseErrorHandlerByType(o.ErrorHandler)
+	if err != nil {
+		return nil, err
+	}
+	switch errHandlType {
+	case "none":
+		errHandlMap["none"] = nil
+	case "log":
+		errHandlMap["log"] = nil
+	case "dlc":
+		dlcSpec, err := o.decode(errHandlValue, errorHandlerKey)
+		if err != nil {
+			return nil, err
+		}
+		errHandlMap["dead-letter-channel"] = map[string]interface{}{
+			"endpoint": dlcSpec,
+		}
+	case "bean":
+		errHandlMap["bean"] = map[string]interface{}{
+			"type": errHandlValue,
+		}
+	case "ref":
+		errHandlMap["ref"] = errHandlValue
+	default:
+		return nil, fmt.Errorf("invalid error handler type %s", o.ErrorHandler)
+	}
+	errHandlMarshalled, err := json.Marshal(&errHandlMap)
+	if err != nil {
+		return nil, err
+	}
+	return &v1alpha1.ErrorHandlerSpec{RawMessage: errHandlMarshalled}, nil
+}
+
+func parseErrorHandlerByType(value string) (string, string, error) {
+	errHandlSplit := strings.SplitN(value, ":", 2)
+	if (errHandlSplit[0] == "dlc" || errHandlSplit[0] == "bean" || errHandlSplit[0] == "ref") &&
+		len(errHandlSplit) != 2 {
+		return "", "", fmt.Errorf("invalid error handler syntax. Type %s needs a configuration (ie %s:value)",
+			errHandlSplit[0], errHandlSplit[0])
+	}
+	if len(errHandlSplit) > 1 {
+		return errHandlSplit[0], errHandlSplit[1], nil
+	}
+	return errHandlSplit[0], "", nil
 }
 
 func (o *bindCmdOptions) decode(res string, key string) (v1alpha1.Endpoint, error) {
@@ -301,17 +371,18 @@ func (o *bindCmdOptions) getProperties(refType string) map[string]string {
 func (o *bindCmdOptions) parseProperty(prop string) (string, string, string, error) {
 	parts := strings.SplitN(prop, "=", 2)
 	if len(parts) != 2 {
-		return "", "", "", fmt.Errorf(`property %q does not follow format "[source|sink|step-<n>].<key>=<value>"`, prop)
+		return "", "", "", fmt.Errorf(`property %q does not follow format "[source|sink|error-handler|step-<n>].<key>=<value>"`, prop)
 	}
 	keyParts := strings.SplitN(parts[0], ".", 2)
 	if len(keyParts) != 2 {
-		return "", "", "", fmt.Errorf(`property key %q does not follow format "[source|sink|step-<n>].<key>"`, parts[0])
+		return "", "", "", fmt.Errorf(`property key %q does not follow format "[source|sink|error-handler|step-<n>].<key>"`, parts[0])
 	}
 	isSource := keyParts[0] == sourceKey
 	isSink := keyParts[0] == sinkKey
+	isErrorHandler := keyParts[0] == errorHandlerKey
 	isStep := strings.HasPrefix(keyParts[0], stepKeyPrefix)
-	if !isSource && !isSink && !isStep {
-		return "", "", "", fmt.Errorf(`property key %q does not start with "source.", "sink." or "step-<n>."`, parts[0])
+	if !isSource && !isSink && !isStep && !isErrorHandler {
+		return "", "", "", fmt.Errorf(`property key %q does not start with "source.", "sink.", "error-handler." or "step-<n>."`, parts[0])
 	}
 	return keyParts[0], keyParts[1], parts[1], nil
 }
@@ -347,7 +418,7 @@ func (o *bindCmdOptions) checkCompliance(cmd *cobra.Command, endpoint v1alpha1.E
 						found = true
 					}
 				}
-				if !found {
+				if !found && len(o.Connects) == 0 {
 					return fmt.Errorf("binding is missing required property %q for Kamelet %q", reqProp, key.Name)
 				}
 			}

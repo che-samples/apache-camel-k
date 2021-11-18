@@ -36,7 +36,6 @@ import (
 )
 
 func main() {
-
 	var rootDir string
 	var destDir string
 
@@ -92,8 +91,13 @@ func main() {
 	// Filter un-interesting files
 	//
 	fs = filter.Skip(fs, filter.FilesWithExtensions(".go"))
+	fs = filter.Skip(fs, func(path string, fi os.FileInfo) bool {
+		return strings.HasSuffix(path, ".gen.yaml") || strings.HasSuffix(path, ".gen.json")
+	})
 	fs = filter.Skip(fs, NamedFilesFilter("kustomization.yaml"))
+	fs = filter.Skip(fs, NamedFilesFilter("Makefile"))
 	fs = filter.Skip(fs, NamedFilesFilter("auto-generated.txt"))
+	fs = filter.Skip(fs, BigFilesFilter(1048576)) // 1M
 	fs = filter.Skip(fs, func(path string, fi os.FileInfo) bool {
 		for _, ex := range exclusions {
 			if strings.HasPrefix(path, ex) {
@@ -142,7 +146,7 @@ limitations under the License.
 	var finalContent []byte
 	finalContent = append(finalContent, []byte(header)...)
 	finalContent = append(finalContent, content...)
-	if err := ioutil.WriteFile(resourceFile, finalContent, 0777); err != nil {
+	if err := ioutil.WriteFile(resourceFile, finalContent, 0o777); err != nil {
 		log.Fatalln(err)
 	}
 }
@@ -157,6 +161,24 @@ func NamedFilesFilter(names ...string) func(path string, fi os.FileInfo) bool {
 			if name == filepath.Base(path) {
 				return true
 			}
+		}
+
+		return false
+	}
+}
+
+//
+// If file is bigger than maximum size (in bytes) then exclude
+//
+func BigFilesFilter(size int) func(path string, fi os.FileInfo) bool {
+	return func(path string, fi os.FileInfo) bool {
+		if fi.IsDir() {
+			return false
+		}
+
+		if fi.Size() > int64(size) {
+			log.Printf("Warning: File %s is skipped due to being %d bytes (greater than maximum %d bytes)", path, fi.Size(), size)
+			return true
 		}
 
 		return false
@@ -200,7 +222,7 @@ func checkDir(dirName string) error {
 		return err
 	}
 	if !dir.IsDir() {
-		return fmt.Errorf("path %s is not a directory\n", dirName)
+		return fmt.Errorf("path %s is not a directory", dirName)
 	}
 
 	return nil

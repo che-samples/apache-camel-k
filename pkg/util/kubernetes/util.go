@@ -24,10 +24,12 @@ import (
 	"github.com/apache/camel-k/pkg/util"
 )
 
+// ToJSON marshal to json format
 func ToJSON(value runtime.Object) ([]byte, error) {
 	return json.Marshal(value)
 }
 
+// ToYAML marshal to yaml format
 func ToYAML(value runtime.Object) ([]byte, error) {
 	data, err := ToJSON(value)
 	if err != nil {
@@ -35,4 +37,21 @@ func ToYAML(value runtime.Object) ([]byte, error) {
 	}
 
 	return util.JSONToYAML(data)
+}
+
+// ToYAMLNoManagedFields marshal to yaml format but without metadata.managedFields
+func ToYAMLNoManagedFields(value runtime.Object) ([]byte, error) {
+	jsondata, err := ToJSON(value)
+	if err != nil {
+		return nil, err
+	}
+
+	mapdata, err := util.JSONToMap(jsondata)
+	if err != nil {
+		return nil, err
+	}
+
+	delete(mapdata["metadata"].(map[string]interface{}), "managedFields")
+
+	return util.MapToYAML(mapdata)
 }

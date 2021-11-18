@@ -28,16 +28,16 @@ import (
 var RegistryName = ""
 
 // BaseImageName -- base image name.
-var BaseImageName string = "integration-base-image"
+var BaseImageName = "integration-base-image"
 
 // BaseWorkingDirectory -- directory used by Docker to construct the base image.
-var BaseWorkingDirectory string = ""
+var BaseWorkingDirectory = ""
 
 // IntegrationWorkingDirectory -- directory used by Docker to construct the integration image.
-var IntegrationWorkingDirectory string = ""
+var IntegrationWorkingDirectory = ""
 
 // NetworkName -- network used by Docker when running the image.
-var NetworkName string = "host"
+var NetworkName = "host"
 
 // Internal variables.
 var (
@@ -129,6 +129,14 @@ func FullImageArg(dockerImage string) []string {
 	if len(imageComponents) == 2 {
 		// Image has a tag already.
 		return ImageArg(imageComponents[0], imageComponents[1])
+	} else if len(imageComponents) > 2 {
+		// Image has an image registry name with a colon inside it:
+		// localhost:5000
+		// and image also has a tag:
+		// localhost:5000/image:latest
+		// Assume tag is always included and is last in the imageComponents list.
+		last := len(imageComponents) - 1
+		return ImageArg(strings.Join(imageComponents[:last], ":"), imageComponents[last])
 	}
 
 	// Image has no tag, latest tag will be added automatically.

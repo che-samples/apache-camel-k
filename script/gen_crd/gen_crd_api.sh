@@ -17,11 +17,13 @@
 
 location=$(dirname $0)
 rootdir=$location/../..
+crd_file=$rootdir/docs/modules/ROOT/partials/apis/crds-html.adoc
 
 echo "Downloading gen-crd-api-reference-docs binary..."
 TMPFILE=`mktemp`
 TMPDIR=`mktemp -d`
 PWD=`pwd`
+# TODO detect proper binary, based on the OS running this script
 wget -q --show-progress https://github.com/ahmetb/gen-crd-api-reference-docs/releases/download/v0.1.5/gen-crd-api-reference-docs_linux_amd64.tar.gz -O $TMPFILE
 tar -C $TMPDIR -xf $TMPFILE
 
@@ -30,7 +32,10 @@ $TMPDIR/gen-crd-api-reference-docs \
     -config $location/gen-crd-api-config.json \
     -template-dir $location/template \
     -api-dir "github.com/apache/camel-k/pkg/apis/camel" \
-    -out-file $rootdir/docs/modules/ROOT/pages/apis/crds-html.adoc
+    -out-file $crd_file
+
+# Workaround: https://github.com/ahmetb/gen-crd-api-reference-docs/issues/33
+sed -i -E "s/%2f/\//" $crd_file
 
 echo "Cleaning the gen-crd-api-reference-docs binary..."
 rm $TMPFILE

@@ -19,47 +19,28 @@ package platform
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 
+	camelv1 "github.com/apache/camel-k/pkg/apis/camel/v1"
+	"github.com/apache/camel-k/pkg/util/defaults"
 	coordination "k8s.io/api/coordination/v1"
-	v1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const OperatorWatchNamespaceEnvVariable = "WATCH_NAMESPACE"
-const operatorNamespaceEnvVariable = "NAMESPACE"
-const operatorPodNameEnvVariable = "POD_NAME"
+const (
+	OperatorWatchNamespaceEnvVariable = "WATCH_NAMESPACE"
+	operatorNamespaceEnvVariable      = "NAMESPACE"
+	operatorPodNameEnvVariable        = "POD_NAME"
+)
 
 const OperatorLockName = "camel-k-lock"
 
-// GetCurrentOperatorImage returns the image currently used by the running operator if present (when running out of cluster, it may be absent).
-func GetCurrentOperatorImage(ctx context.Context, c client.Client) (string, error) {
-	podNamespace := GetOperatorNamespace()
-	podName := GetOperatorPodName()
-	if podNamespace == "" || podName == "" {
-		return "", nil
-	}
-
-	podKey := client.ObjectKey{
-		Namespace: podNamespace,
-		Name:      podName,
-	}
-	pod := v1.Pod{}
-
-	if err := c.Get(ctx, podKey, &pod); err != nil && k8serrors.IsNotFound(err) {
-		return "", nil
-	} else if err != nil {
-		return "", err
-	}
-	if len(pod.Spec.Containers) == 0 {
-		return "", errors.New("no containers found in operator pod")
-	}
-	return pod.Spec.Containers[0].Image, nil
-}
+var OperatorImage string
 
 // IsCurrentOperatorGlobal returns true if the operator is configured to watch all namespaces
 func IsCurrentOperatorGlobal() bool {
@@ -94,17 +75,13 @@ func GetOperatorPodName() string {
 }
 
 // IsNamespaceLocked tells if the namespace contains a lock indicating that an operator owns it
-func IsNamespaceLocked(ctx context.Context, c client.Client, namespace string) (bool, error) {
+func IsNamespaceLocked(ctx context.Context, c ctrl.Reader, namespace string) (bool, error) {
 	if namespace == "" {
 		return false, nil
 	}
 
 	lease := coordination.Lease{}
-	key := client.ObjectKey{
-		Namespace: namespace,
-		Name:      OperatorLockName,
-	}
-	if err := c.Get(ctx, key, &lease); err != nil && k8serrors.IsNotFound(err) {
+	if err := c.Get(ctx, ctrl.ObjectKey{Namespace: namespace, Name: OperatorLockName}, &lease); err != nil && k8serrors.IsNotFound(err) {
 		return false, nil
 	} else if err != nil {
 		return true, err
@@ -113,7 +90,7 @@ func IsNamespaceLocked(ctx context.Context, c client.Client, namespace string) (
 }
 
 // IsOperatorAllowedOnNamespace returns true if the current operator is allowed to react on changes in the given namespace
-func IsOperatorAllowedOnNamespace(ctx context.Context, c client.Client, namespace string) (bool, error) {
+func IsOperatorAllowedOnNamespace(ctx context.Context, c ctrl.Reader, namespace string) (bool, error) {
 	if !IsCurrentOperatorGlobal() {
 		return true, nil
 	}
@@ -128,3 +105,76 @@ func IsOperatorAllowedOnNamespace(ctx context.Context, c client.Client, namespac
 	}
 	return !alreadyOwned, nil
 }
+
+func IsOperatorHandler(object ctrl.Object) bool {
+	if object == nil {
+		return true
+	}
+	resourceID := object.GetAnnotations()[camelv1.OperatorIDAnnotation]
+	operatorID := defaults.OperatorID()
+	return resourceID == operatorID
+}
+
+// FilteringFuncs do preliminary checks to determine if certain events should be handled by the controller
+// based on labels on the resources (e.g. camel.apache.org/operator.id) and the operator configuration,
+// before handing the computation over to the user code.
+type FilteringFuncs struct {
+	// Create returns true if the Create event should be processed
+	CreateFunc func(event.CreateEvent) bool
+
+	// Delete returns true if the Delete event should be processed
+	DeleteFunc func(event.DeleteEvent) bool
+
+	// Update returns true if the Update event should be processed
+	UpdateFunc func(event.UpdateEvent) bool
+
+	// Generic returns true if the Generic event should be processed
+	GenericFunc func(event.GenericEvent) bool
+}
+
+func (f FilteringFuncs) Create(e event.CreateEvent) bool {
+	if !IsOperatorHandler(e.Object) {
+		return false
+	}
+	if f.CreateFunc != nil {
+		return f.CreateFunc(e)
+	}
+	return true
+}
+
+func (f FilteringFuncs) Delete(e event.DeleteEvent) bool {
+	if !IsOperatorHandler(e.Object) {
+		return false
+	}
+	if f.DeleteFunc != nil {
+		return f.DeleteFunc(e)
+	}
+	return true
+}
+
+func (f FilteringFuncs) Update(e event.UpdateEvent) bool {
+	if !IsOperatorHandler(e.ObjectNew) {
+		return false
+	}
+	if e.ObjectOld != nil && e.ObjectNew != nil &&
+		e.ObjectOld.GetAnnotations()[camelv1.OperatorIDAnnotation] != e.ObjectNew.GetAnnotations()[camelv1.OperatorIDAnnotation] {
+		// Always force reconciliation when the object becomes managed by the current operator
+		return true
+	}
+	if f.UpdateFunc != nil {
+		return f.UpdateFunc(e)
+	}
+	return true
+}
+
+func (f FilteringFuncs) Generic(e event.GenericEvent) bool {
+	if !IsOperatorHandler(e.Object) {
+		return false
+	}
+	if f.GenericFunc != nil {
+		return f.GenericFunc(e)
+	}
+	return true
+}
+
+var _ predicate.Predicate = FilteringFuncs{}

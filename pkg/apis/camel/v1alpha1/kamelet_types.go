@@ -25,7 +25,15 @@ import (
 )
 
 const (
-	AnnotationIcon = "camel.apache.org/kamelet.icon"
+	AnnotationIcon       = "camel.apache.org/kamelet.icon"
+	KameletBundledLabel  = "camel.apache.org/kamelet.bundled"
+	KameletReadOnlyLabel = "camel.apache.org/kamelet.readonly"
+	KameletTypeLabel     = "camel.apache.org/kamelet.type"
+	KameletGroupLabel    = "camel.apache.org/kamelet.group"
+
+	KameletTypeSink   = "sink"
+	KameletTypeSource = "source"
+	KameletTypeAction = "action"
 )
 
 var (
@@ -35,8 +43,10 @@ var (
 
 // KameletSpec defines the desired state of Kamelet
 type KameletSpec struct {
-	Definition    *JSONSchemaProps            `json:"definition,omitempty"`
-	Sources       []camelv1.SourceSpec        `json:"sources,omitempty"`
+	Definition *JSONSchemaProps     `json:"definition,omitempty"`
+	Sources    []camelv1.SourceSpec `json:"sources,omitempty"`
+	Template   *camelv1.Template    `json:"template,omitempty"`
+	// Deprecated: use template
 	Flow          *camelv1.Flow               `json:"flow,omitempty"`
 	Authorization *AuthorizationSpec          `json:"authorization,omitempty"`
 	Types         map[EventSlot]EventTypeSpec `json:"types,omitempty"`
@@ -84,7 +94,7 @@ type KameletCondition struct {
 	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
 	// The reason for the condition's last transition.
 	Reason string `json:"reason,omitempty"`
-	// A human readable message indicating details about the transition.
+	// A human-readable message indicating details about the transition.
 	Message string `json:"message,omitempty"`
 }
 
@@ -100,6 +110,8 @@ const (
 	KameletConditionReasonInvalidName string = "InvalidName"
 	// KameletConditionReasonInvalidProperty --
 	KameletConditionReasonInvalidProperty string = "InvalidProperty"
+	// KameletConditionReasonInvalidTemplate --
+	KameletConditionReasonInvalidTemplate string = "InvalidTemplate"
 )
 
 type KameletPhase string

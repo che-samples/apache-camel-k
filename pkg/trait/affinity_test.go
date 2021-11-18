@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
-	"github.com/apache/camel-k/pkg/util"
 )
 
 func TestConfigureAffinityTraitDoesSucceed(t *testing.T) {
@@ -41,8 +40,8 @@ func TestConfigureAffinityTraitDoesSucceed(t *testing.T) {
 func TestConfigureAffinityTraitWithConflictingAffinitiesFails(t *testing.T) {
 	affinityTrait := createNominalAffinityTest()
 	environment, _ := createNominalDeploymentTraitTest()
-	affinityTrait.PodAffinity = util.BoolP(true)
-	affinityTrait.PodAntiAffinity = util.BoolP(true)
+	affinityTrait.PodAffinity = BoolP(true)
+	affinityTrait.PodAntiAffinity = BoolP(true)
 	configured, err := affinityTrait.Configure(environment)
 
 	assert.False(t, configured)
@@ -51,7 +50,7 @@ func TestConfigureAffinityTraitWithConflictingAffinitiesFails(t *testing.T) {
 
 func TestConfigureDisabledAffinityTraitFails(t *testing.T) {
 	affinityTrait := createNominalAffinityTest()
-	affinityTrait.Enabled = new(bool)
+	affinityTrait.Enabled = BoolP(false)
 	environment, _ := createNominalDeploymentTraitTest()
 	configured, err := affinityTrait.Configure(environment)
 
@@ -82,6 +81,8 @@ func TestApplyEmptyAffinityLabelsDoesSucceed(t *testing.T) {
 }
 
 func testApplyEmptyAffinityLabelsDoesSucceed(t *testing.T, trait *affinityTrait, environment *Environment, affinity *corev1.Affinity) {
+	t.Helper()
+
 	err := trait.Apply(environment)
 
 	assert.Nil(t, err)
@@ -103,6 +104,8 @@ func TestApplyNodeAffinityLabelsDoesSucceed(t *testing.T) {
 }
 
 func testApplyNodeAffinityLabelsDoesSucceed(t *testing.T, trait *affinityTrait, environment *Environment, podSpec *corev1.PodSpec) {
+	t.Helper()
+
 	err := trait.Apply(environment)
 
 	assert.Nil(t, err)
@@ -117,7 +120,7 @@ func testApplyNodeAffinityLabelsDoesSucceed(t *testing.T, trait *affinityTrait, 
 
 func TestApplyPodAntiAffinityLabelsDoesSucceed(t *testing.T) {
 	affinityTrait := createNominalAffinityTest()
-	affinityTrait.PodAntiAffinity = util.BoolP(true)
+	affinityTrait.PodAntiAffinity = BoolP(true)
 	affinityTrait.PodAntiAffinityLabels = []string{"criteria != value"}
 
 	environment, deployment := createNominalDeploymentTraitTest()
@@ -131,6 +134,8 @@ func TestApplyPodAntiAffinityLabelsDoesSucceed(t *testing.T) {
 }
 
 func testApplyPodAntiAffinityLabelsDoesSucceed(t *testing.T, trait *affinityTrait, environment *Environment, podSpec *corev1.PodSpec) {
+	t.Helper()
+
 	err := trait.Apply(environment)
 
 	assert.Nil(t, err)
@@ -150,7 +155,7 @@ func testApplyPodAntiAffinityLabelsDoesSucceed(t *testing.T, trait *affinityTrai
 
 func TestApplyPodAffinityLabelsDoesSucceed(t *testing.T) {
 	affinityTrait := createNominalAffinityTest()
-	affinityTrait.PodAffinity = util.BoolP(true)
+	affinityTrait.PodAffinity = BoolP(true)
 	affinityTrait.PodAffinityLabels = []string{"!criteria"}
 
 	environment, deployment := createNominalDeploymentTraitTest()
@@ -164,6 +169,8 @@ func TestApplyPodAffinityLabelsDoesSucceed(t *testing.T) {
 }
 
 func testApplyPodAffinityLabelsDoesSucceed(t *testing.T, trait *affinityTrait, environment *Environment, podSpec *corev1.PodSpec) {
+	t.Helper()
+
 	err := trait.Apply(environment)
 
 	assert.Nil(t, err)
@@ -181,9 +188,8 @@ func testApplyPodAffinityLabelsDoesSucceed(t *testing.T, trait *affinityTrait, e
 }
 
 func createNominalAffinityTest() *affinityTrait {
-	trait := newAffinityTrait().(*affinityTrait)
-	enabled := true
-	trait.Enabled = &enabled
+	trait, _ := newAffinityTrait().(*affinityTrait)
+	trait.Enabled = BoolP(true)
 
 	return trait
 }

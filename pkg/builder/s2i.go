@@ -18,10 +18,16 @@ limitations under the License.
 package builder
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -41,8 +47,7 @@ import (
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 	"github.com/apache/camel-k/pkg/client"
 	"github.com/apache/camel-k/pkg/util/kubernetes"
-	"github.com/apache/camel-k/pkg/util/kubernetes/customclient"
-	"github.com/apache/camel-k/pkg/util/zip"
+	"github.com/apache/camel-k/pkg/util/log"
 )
 
 type s2iTask struct {
@@ -140,20 +145,38 @@ func (t *s2iTask) Do(ctx context.Context) v1.BuildStatus {
 	if err != nil {
 		return status.Failed(err)
 	}
-	archive := path.Join(tmpDir, "archive.zip")
+	archive := path.Join(tmpDir, "archive.tar.gz")
 	defer os.RemoveAll(tmpDir)
 
-	err = zip.Directory(t.task.ContextDir, archive)
+	contextDir := t.task.ContextDir
+	if contextDir == "" {
+		// Use the working directory.
+		// This is useful when the task is executed in-container,
+		// so that its WorkingDir can be used to share state and
+		// coordinate with other tasks.
+		pwd, err := os.Getwd()
+		if err != nil {
+			return status.Failed(err)
+		}
+		contextDir = path.Join(pwd, ContextDir)
+	}
+
+	archiveFile, err := os.Create(archive)
 	if err != nil {
-		return status.Failed(errors.Wrap(err, "cannot zip context directory"))
+		return status.Failed(errors.Wrap(err, "cannot create tar archive"))
+	}
+
+	err = tarDir(contextDir, archiveFile)
+	if err != nil {
+		return status.Failed(errors.Wrap(err, "cannot tar context directory"))
 	}
 
 	resource, err := ioutil.ReadFile(archive)
 	if err != nil {
-		return status.Failed(errors.Wrap(err, "cannot fully read zip file "+archive))
+		return status.Failed(errors.Wrap(err, "cannot read tar file "+archive))
 	}
 
-	restClient, err := customclient.GetClientFor(t.c, "build.openshift.io", "v1")
+	restClient, err := kubernetes.GetClientFor(t.c, "build.openshift.io", "v1")
 	if err != nil {
 		return status.Failed(err)
 	}
@@ -175,31 +198,23 @@ func (t *s2iTask) Do(ctx context.Context) v1.BuildStatus {
 		return status.Failed(errors.Wrap(err, "no raw data retrieved"))
 	}
 
-	ocbuild := buildv1.Build{}
-	err = json.Unmarshal(data, &ocbuild)
+	s2iBuild := buildv1.Build{}
+	err = json.Unmarshal(data, &s2iBuild)
 	if err != nil {
 		return status.Failed(errors.Wrap(err, "cannot unmarshal instantiated binary response"))
 	}
 
-	// FIXME: Use context.WithTimeout
-	err = kubernetes.WaitCondition(ctx, t.c, &ocbuild, func(obj interface{}) (bool, error) {
-		if val, ok := obj.(*buildv1.Build); ok {
-			if val.Status.Phase == buildv1.BuildPhaseComplete {
-				if val.Status.Output.To != nil {
-					status.Digest = val.Status.Output.To.ImageDigest
-				}
-				return true, nil
-			} else if val.Status.Phase == buildv1.BuildPhaseCancelled ||
-				val.Status.Phase == buildv1.BuildPhaseFailed ||
-				val.Status.Phase == buildv1.BuildPhaseError {
-				return false, errors.New("build failed")
+	err = t.waitForS2iBuildCompletion(ctx, t.c, &s2iBuild)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if err := t.cancelBuild(context.Background(), &s2iBuild); err != nil {
+				log.Errorf(err, "cannot cancel s2i Build: %s/%s", s2iBuild.Namespace, s2iBuild.Name)
 			}
 		}
-		return false, nil
-	}, 5*time.Minute)
-
-	if err != nil {
 		return status.Failed(err)
+	}
+	if s2iBuild.Status.Output.To != nil {
+		status.Digest = s2iBuild.Status.Output.To.ImageDigest
 	}
 
 	err = t.c.Get(ctx, ctrl.ObjectKeyFromObject(is), is)
@@ -231,4 +246,94 @@ func (t *s2iTask) getControllerReference() metav1.Object {
 		}
 	}
 	return owner
+}
+
+func (t *s2iTask) waitForS2iBuildCompletion(ctx context.Context, c client.Client, build *buildv1.Build) error {
+	key := ctrl.ObjectKeyFromObject(build)
+	for {
+		select {
+
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-time.After(1 * time.Second):
+			err := c.Get(ctx, key, build)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				return err
+			}
+
+			if build.Status.Phase == buildv1.BuildPhaseComplete {
+				return nil
+			} else if build.Status.Phase == buildv1.BuildPhaseCancelled ||
+				build.Status.Phase == buildv1.BuildPhaseFailed ||
+				build.Status.Phase == buildv1.BuildPhaseError {
+				return errors.New("build failed")
+			}
+		}
+	}
+}
+
+func (t *s2iTask) cancelBuild(ctx context.Context, build *buildv1.Build) error {
+	target := build.DeepCopy()
+	target.Status.Cancelled = true
+	if err := t.c.Patch(ctx, target, ctrl.MergeFrom(build)); err != nil {
+		return err
+	}
+	*build = *target
+	return nil
+}
+
+func tarDir(src string, writers ...io.Writer) error {
+	// ensure the src actually exists before trying to tar it
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("unable to tar files: %w", err)
+	}
+
+	mw := io.MultiWriter(writers...)
+
+	gzw := gzip.NewWriter(mw)
+	defer gzw.Close()
+
+	tw := tar.NewWriter(gzw)
+	defer tw.Close()
+
+	return filepath.Walk(src, func(file string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
+
+		header, err := tar.FileInfoHeader(fi, fi.Name())
+		if err != nil {
+			return err
+		}
+
+		// update the name to correctly reflect the desired destination when un-taring
+		header.Name = strings.TrimPrefix(strings.ReplaceAll(file, src, ""), string(filepath.Separator))
+
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+
+		f, err := os.Open(file)
+		if err != nil {
+			return err
+		}
+
+		if _, err := io.Copy(tw, f); err != nil {
+			return err
+		}
+
+		// manually close here after each file operation; deferring would cause each file close
+		// to wait until all operations have completed.
+		f.Close()
+
+		return nil
+	})
 }

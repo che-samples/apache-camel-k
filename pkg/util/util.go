@@ -30,16 +30,17 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pkg/errors"
-
-	"github.com/scylladb/go-set/strset"
 	yaml2 "gopkg.in/yaml.v2"
+
+	"github.com/pkg/errors"
+	"github.com/scylladb/go-set/strset"
 )
 
-/// Directories and file names:
+// Directories and file names:
 
-// MavenWorkingDirectory --  Directory used by Maven for an invocation of the kamel local command. By default a temporary folder will be used.
-var MavenWorkingDirectory string = ""
+// MavenWorkingDirectory is the directory used by Maven for an invocation of the kamel local command.
+// By default, a temporary folder will be used.
+var MavenWorkingDirectory = ""
 
 // DefaultDependenciesDirectoryName --
 const DefaultDependenciesDirectoryName = "dependencies"
@@ -53,6 +54,15 @@ const DefaultRoutesDirectoryName = "routes"
 // DefaultWorkingDirectoryName --
 const DefaultWorkingDirectoryName = "workspace"
 
+// CustomQuarkusDirectoryName --
+const CustomQuarkusDirectoryName = "quarkus"
+
+// CustomAppDirectoryName --
+const CustomAppDirectoryName = "app"
+
+// CustomLibDirectoryName --
+const CustomLibDirectoryName = "lib/main"
+
 // ContainerDependenciesDirectory --
 var ContainerDependenciesDirectory = "/deployments/dependencies"
 
@@ -65,20 +75,28 @@ var ContainerRoutesDirectory = "/etc/camel/sources"
 // ContainerResourcesDirectory --
 var ContainerResourcesDirectory = "/etc/camel/resources"
 
+// ContainerQuarkusDirectoryName --
+const ContainerQuarkusDirectoryName = "/quarkus"
+
+// ContainerAppDirectoryName --
+const ContainerAppDirectoryName = "/app"
+
+// ContainerLibDirectoryName --
+const ContainerLibDirectoryName = "/lib/main"
+
 // QuarkusDependenciesBaseDirectory --
 var QuarkusDependenciesBaseDirectory = "/quarkus-app"
 
 // ListOfLazyEvaluatedEnvVars -- List of unevaluated environment variables.
-// These are sensitive values or values that may have different values depending
+// These are sensitive values or values that may have different values depending on
 // where the integration is run (locally vs. the cloud). These environment variables
 // are evaluated at the time of the integration invocation.
-var ListOfLazyEvaluatedEnvVars []string = []string{}
+var ListOfLazyEvaluatedEnvVars = []string{}
 
 // CLIEnvVars -- List of CLI provided environment variables. They take precedence over
 // any environment variables with the same name.
-var CLIEnvVars []string = []string{}
+var CLIEnvVars = make([]string, 0)
 
-// StringSliceJoin --
 func StringSliceJoin(slices ...[]string) []string {
 	size := 0
 
@@ -95,7 +113,6 @@ func StringSliceJoin(slices ...[]string) []string {
 	return result
 }
 
-// StringSliceContains --
 func StringSliceContains(slice []string, items []string) bool {
 	for i := 0; i < len(items); i++ {
 		if !StringSliceExists(slice, items[i]) {
@@ -106,7 +123,6 @@ func StringSliceContains(slice []string, items []string) bool {
 	return true
 }
 
-// StringSliceExists --
 func StringSliceExists(slice []string, item string) bool {
 	for i := 0; i < len(slice); i++ {
 		if slice[i] == item {
@@ -117,7 +133,16 @@ func StringSliceExists(slice []string, item string) bool {
 	return false
 }
 
-// StringSliceContainsAnyOf --
+func StringContainsPrefix(slice []string, prefix string) bool {
+	for i := 0; i < len(slice); i++ {
+		if strings.HasPrefix(slice[i], prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func StringSliceContainsAnyOf(slice []string, items ...string) bool {
 	for i := 0; i < len(slice); i++ {
 		for j := 0; j < len(items); j++ {
@@ -130,7 +155,7 @@ func StringSliceContainsAnyOf(slice []string, items ...string) bool {
 	return false
 }
 
-// StringSliceUniqueAdd append the given item if not already present in the slice
+// StringSliceUniqueAdd appends the given item if not already present in the slice
 func StringSliceUniqueAdd(slice *[]string, item string) bool {
 	if slice == nil {
 		newSlice := make([]string, 0)
@@ -147,7 +172,7 @@ func StringSliceUniqueAdd(slice *[]string, item string) bool {
 	return true
 }
 
-// StringSliceUniqueConcat append all the items of the "items" slice if they are not already present in the slice
+// StringSliceUniqueConcat appends all the items of the "items" slice if they are not already present in the slice
 func StringSliceUniqueConcat(slice *[]string, items []string) bool {
 	changed := false
 	for _, item := range items {
@@ -155,19 +180,19 @@ func StringSliceUniqueConcat(slice *[]string, items []string) bool {
 			changed = true
 		}
 	}
+
 	return changed
 }
 
-// SubstringFrom --
 func SubstringFrom(s string, substr string) string {
 	index := strings.Index(s, substr)
 	if index != -1 {
 		return s[index:]
 	}
+
 	return ""
 }
 
-// EncodeXML --
 func EncodeXML(content interface{}) ([]byte, error) {
 	w := &bytes.Buffer{}
 	w.WriteString(xml.Header)
@@ -175,22 +200,20 @@ func EncodeXML(content interface{}) ([]byte, error) {
 	e := xml.NewEncoder(w)
 	e.Indent("", "  ")
 
-	err := e.Encode(content)
-	if err != nil {
+	if err := e.Encode(content); err != nil {
 		return []byte{}, err
 	}
 
 	return w.Bytes(), nil
 }
 
-// CopyFile --
 func CopyFile(src, dst string) (int64, error) {
-	sourceFileStat, err := os.Stat(src)
+	stat, err := os.Stat(src)
 	if err != nil {
 		return 0, err
 	}
 
-	if !sourceFileStat.Mode().IsRegular() {
+	if !stat.Mode().IsRegular() {
 		return 0, fmt.Errorf("%s is not a regular file", src)
 	}
 
@@ -200,26 +223,27 @@ func CopyFile(src, dst string) (int64, error) {
 	}
 	defer source.Close()
 
-	err = os.MkdirAll(path.Dir(dst), 0777)
+	err = os.MkdirAll(path.Dir(dst), 0o777)
 	if err != nil {
 		return 0, err
 	}
 
-	destination, err := os.Create(dst)
+	destination, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, stat.Mode())
 	if err != nil {
 		return 0, err
 	}
+
 	defer destination.Close()
 	nBytes, err := io.Copy(destination, source)
+
 	return nBytes, err
 }
 
-// WriteFileWithContent --
 func WriteFileWithContent(buildDir string, relativePath string, content []byte) error {
 	filePath := path.Join(buildDir, relativePath)
 	fileDir := path.Dir(filePath)
 	// Create dir if not present
-	err := os.MkdirAll(fileDir, 0777)
+	err := os.MkdirAll(fileDir, 0o777)
 	if err != nil {
 		return errors.Wrap(err, "could not create dir for file "+relativePath)
 	}
@@ -237,7 +261,6 @@ func WriteFileWithContent(buildDir string, relativePath string, content []byte) 
 	return nil
 }
 
-// WriteFileWithBytesMarshallerContent --
 func WriteFileWithBytesMarshallerContent(buildDir string, relativePath string, content BytesMarshaller) error {
 	data, err := content.MarshalBytes()
 	if err != nil {
@@ -247,7 +270,6 @@ func WriteFileWithBytesMarshallerContent(buildDir string, relativePath string, c
 	return WriteFileWithContent(buildDir, relativePath, data)
 }
 
-// FindAllDistinctStringSubmatch --
 func FindAllDistinctStringSubmatch(data string, regexps ...*regexp.Regexp) []string {
 	submatchs := strset.New()
 
@@ -264,7 +286,6 @@ func FindAllDistinctStringSubmatch(data string, regexps ...*regexp.Regexp) []str
 	return submatchs.List()
 }
 
-// FindNamedMatches ---
 func FindNamedMatches(expr string, str string) map[string]string {
 	regex := regexp.MustCompile(expr)
 	match := regex.FindStringSubmatch(str)
@@ -276,7 +297,6 @@ func FindNamedMatches(expr string, str string) map[string]string {
 	return results
 }
 
-// FileExists --
 func FileExists(name string) (bool, error) {
 	info, err := os.Stat(name)
 	if os.IsNotExist(err) {
@@ -286,7 +306,6 @@ func FileExists(name string) (bool, error) {
 	return !info.IsDir(), err
 }
 
-// DirectoryExists --
 func DirectoryExists(directory string) (bool, error) {
 	info, err := os.Stat(directory)
 	if os.IsNotExist(err) {
@@ -300,17 +319,30 @@ func DirectoryExists(directory string) (bool, error) {
 	return info.IsDir(), nil
 }
 
-// CreateDirectory --
+func DirectoryEmpty(directory string) (bool, error) {
+	f, err := os.Open(directory)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	_, err = f.Readdirnames(1)
+	if errors.Is(err, io.EOF) {
+		return true, nil
+	}
+	return false, err
+}
+
 func CreateDirectory(directory string) error {
 	if directory != "" {
-		// If directory does not exist, create it.
+		// If directory does not exist, create it
 		directoryExists, err := DirectoryExists(directory)
 		if err != nil {
 			return err
 		}
 
 		if !directoryExists {
-			err := os.MkdirAll(directory, 0777)
+			err := os.MkdirAll(directory, 0o777)
 			if err != nil {
 				return err
 			}
@@ -320,12 +352,10 @@ func CreateDirectory(directory string) error {
 	return nil
 }
 
-// BytesMarshaller --
 type BytesMarshaller interface {
 	MarshalBytes() ([]byte, error)
 }
 
-// SortedMapKeys --
 func SortedMapKeys(m map[string]interface{}) []string {
 	res := make([]string, len(m))
 	i := 0
@@ -337,7 +367,6 @@ func SortedMapKeys(m map[string]interface{}) []string {
 	return res
 }
 
-// SortedStringMapKeys --
 func SortedStringMapKeys(m map[string]string) []string {
 	res := make([]string, len(m))
 	i := 0
@@ -349,14 +378,24 @@ func SortedStringMapKeys(m map[string]string) []string {
 	return res
 }
 
-// DependenciesToJSON --
+// CopyMap clones a map of strings
+func CopyMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	dest := make(map[string]string, len(source))
+	for k, v := range source {
+		dest[k] = v
+	}
+	return dest
+}
+
 func DependenciesToJSON(list []string) ([]byte, error) {
 	jsondata := map[string]interface{}{}
 	jsondata["dependencies"] = list
 	return json.Marshal(jsondata)
 }
 
-// DependenciesToYAML --
 func DependenciesToYAML(list []string) ([]byte, error) {
 	data, err := DependenciesToJSON(list)
 	if err != nil {
@@ -366,33 +405,44 @@ func DependenciesToYAML(list []string) ([]byte, error) {
 	return JSONToYAML(data)
 }
 
-// JSONToYAML --
 func JSONToYAML(src []byte) ([]byte, error) {
+	mapdata, err := JSONToMap(src)
+	if err != nil {
+		return nil, err
+	}
+
+	return MapToYAML(mapdata)
+}
+
+func JSONToMap(src []byte) (map[string]interface{}, error) {
 	jsondata := map[string]interface{}{}
 	err := json.Unmarshal(src, &jsondata)
 	if err != nil {
-		return nil, fmt.Errorf("error unmarshalling json: %v", err)
+		return nil, fmt.Errorf("error unmarshalling json: %w", err)
 	}
-	yamldata, err := yaml2.Marshal(&jsondata)
+
+	return jsondata, nil
+}
+
+func MapToYAML(src map[string]interface{}) ([]byte, error) {
+	yamldata, err := yaml2.Marshal(&src)
 	if err != nil {
-		return nil, fmt.Errorf("error marshalling to yaml: %v", err)
+		return nil, fmt.Errorf("error marshalling to yaml: %w", err)
 	}
 
 	return yamldata, nil
 }
 
-// WriteToFile --
 func WriteToFile(filePath string, fileContents string) error {
-	err := ioutil.WriteFile(filePath, []byte(fileContents), 0777)
+	err := ioutil.WriteFile(filePath, []byte(fileContents), 0o777)
 	if err != nil {
 		return errors.Errorf("error writing file: %v", filePath)
 	}
 
-	// All went well, return true.
 	return nil
 }
 
-/// Local directories:
+// Local directories:
 
 // GetLocalPropertiesDir -- <mavenWorkingDirectory>/properties
 func GetLocalPropertiesDir() string {
@@ -409,7 +459,21 @@ func GetLocalRoutesDir() string {
 	return path.Join(MavenWorkingDirectory, DefaultRoutesDirectoryName)
 }
 
-// CreateLocalPropertiesDirectory --
+// GetLocalQuarkusDir -- <mavenWorkingDirectory>/quarkus
+func GetLocalQuarkusDir() string {
+	return path.Join(MavenWorkingDirectory, CustomQuarkusDirectoryName)
+}
+
+// GetLocalAppDir -- <mavenWorkingDirectory>/app
+func GetLocalAppDir() string {
+	return path.Join(MavenWorkingDirectory, CustomAppDirectoryName)
+}
+
+// GetLocalLibDir -- <mavenWorkingDirectory>/lib/main
+func GetLocalLibDir() string {
+	return path.Join(MavenWorkingDirectory, CustomLibDirectoryName)
+}
+
 func CreateLocalPropertiesDirectory() error {
 	// Do not create a directory unless the maven directory contains a valid value.
 	if MavenWorkingDirectory == "" {
@@ -422,7 +486,7 @@ func CreateLocalPropertiesDirectory() error {
 	}
 
 	if !directoryExists {
-		err := os.MkdirAll(GetLocalPropertiesDir(), 0777)
+		err := os.MkdirAll(GetLocalPropertiesDir(), 0o777)
 		if err != nil {
 			return err
 		}
@@ -430,7 +494,6 @@ func CreateLocalPropertiesDirectory() error {
 	return nil
 }
 
-// CreateLocalDependenciesDirectory --
 func CreateLocalDependenciesDirectory() error {
 	// Do not create a directory unless the maven directory contains a valid value.
 	if MavenWorkingDirectory == "" {
@@ -443,7 +506,7 @@ func CreateLocalDependenciesDirectory() error {
 	}
 
 	if !directoryExists {
-		err := os.MkdirAll(GetLocalDependenciesDir(), 0777)
+		err := os.MkdirAll(GetLocalDependenciesDir(), 0o777)
 		if err != nil {
 			return err
 		}
@@ -451,7 +514,6 @@ func CreateLocalDependenciesDirectory() error {
 	return nil
 }
 
-// CreateLocalRoutesDirectory --
 func CreateLocalRoutesDirectory() error {
 	// Do not create a directory unless the maven directory contains a valid value.
 	if MavenWorkingDirectory == "" {
@@ -464,7 +526,7 @@ func CreateLocalRoutesDirectory() error {
 	}
 
 	if !directoryExists {
-		err := os.MkdirAll(GetLocalRoutesDir(), 0777)
+		err := os.MkdirAll(GetLocalRoutesDir(), 0o777)
 		if err != nil {
 			return err
 		}
@@ -472,7 +534,66 @@ func CreateLocalRoutesDirectory() error {
 	return nil
 }
 
-// GetEnvironmentVariable --
+func CreateLocalQuarkusDirectory() error {
+	// Do not create a directory unless the maven directory contains a valid value.
+	if MavenWorkingDirectory == "" {
+		return nil
+	}
+
+	directoryExists, err := DirectoryExists(GetLocalQuarkusDir())
+	if err != nil {
+		return err
+	}
+
+	if !directoryExists {
+		err := os.MkdirAll(GetLocalQuarkusDir(), 0o777)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func CreateLocalAppDirectory() error {
+	// Do not create a directory unless the maven directory contains a valid value.
+	if MavenWorkingDirectory == "" {
+		return nil
+	}
+
+	directoryExists, err := DirectoryExists(GetLocalAppDir())
+	if err != nil {
+		return err
+	}
+
+	if !directoryExists {
+		err := os.MkdirAll(GetLocalAppDir(), 0o777)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func CreateLocalLibDirectory() error {
+	// Do not create a directory unless the maven directory contains a valid value.
+	if MavenWorkingDirectory == "" {
+		return nil
+	}
+
+	directoryExists, err := DirectoryExists(GetLocalLibDir())
+	if err != nil {
+		return err
+	}
+
+	if !directoryExists {
+		err := os.MkdirAll(GetLocalLibDir(), 0o777)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func GetEnvironmentVariable(variable string) (string, error) {
 	value, isPresent := os.LookupEnv(variable)
 	if !isPresent {
@@ -486,41 +607,12 @@ func GetEnvironmentVariable(variable string) (string, error) {
 	return value, nil
 }
 
-/// Bool operations:
-
-// BoolP returns a pointer to a bool value
-func BoolP(b bool) *bool {
-	return &b
-}
-
-// IsTrue checks if the bool pointer is defined and true
-func IsTrue(b *bool) bool {
-	return b != nil && *b
-}
-
-// IsNilOrTrue checks if the bool pointer is nil or true.
-// You can use it if the bool pointer is meant to be true by default.
-func IsNilOrTrue(b *bool) bool {
-	return b == nil || *b
-}
-
-// IsFalse checks if the bool pointer is defined and false
-func IsFalse(b *bool) bool {
-	return b != nil && !*b
-}
-
-// IsNilOrFalse checks if the bool pointer is nil or false.
-// You can use it if the bool pointer is meant to be false by default.
-func IsNilOrFalse(b *bool) bool {
-	return b == nil || !*b
-}
-
-// EvaluateCLIAndLazyEnvVars -- Function that creates a list of environment
+// EvaluateCLIAndLazyEnvVars creates a list of environment
 // variables with entries VAR=value that can be passed when running the integration.
 func EvaluateCLIAndLazyEnvVars() ([]string, error) {
 	evaluatedEnvVars := []string{}
 
-	// Add CLI environment variables.
+	// Add CLI environment variables
 	setEnvVars := []string{}
 	for _, cliEnvVar := range CLIEnvVars {
 		// Mark variable name as set.
@@ -537,6 +629,7 @@ func EvaluateCLIAndLazyEnvVars() ([]string, error) {
 		for _, setEnvVar := range setEnvVars {
 			if setEnvVar == lazyEnvVar {
 				alreadySet = true
+
 				break
 			}
 		}
@@ -553,21 +646,118 @@ func EvaluateCLIAndLazyEnvVars() ([]string, error) {
 	return evaluatedEnvVars, nil
 }
 
-// CopyIntegrationFilesToDirectory --
 func CopyIntegrationFilesToDirectory(files []string, directory string) ([]string, error) {
-	// Create directory if one does not already exist.
+	// Create directory if one does not already exist
 	err := CreateDirectory(directory)
 	if err != nil {
 		return nil, err
 	}
 
-	// Coopy files to new location. Also create the list with relocated files.
+	// Copy files to new location. Also create the list with relocated files.
 	relocatedFilesList := []string{}
 	for _, filePath := range files {
 		newFilePath := path.Join(directory, path.Base(filePath))
-		CopyFile(filePath, newFilePath)
+		_, err := CopyFile(filePath, newFilePath)
+		if err != nil {
+			return relocatedFilesList, err
+		}
 		relocatedFilesList = append(relocatedFilesList, newFilePath)
 	}
 
 	return relocatedFilesList, nil
+}
+
+func CopyQuarkusAppFiles(localDependenciesDirectory string, localQuarkusDir string) error {
+	// Create directory if one does not already exist
+	err := CreateDirectory(localQuarkusDir)
+	if err != nil {
+		return err
+	}
+
+	// Transfer all files with a .dat extension and all files with a *-bytecode.jar suffix.
+	files, err := getRegularFileNamesInDir(localDependenciesDirectory)
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		if strings.HasSuffix(file, ".dat") || strings.HasSuffix(file, "-bytecode.jar") {
+			source := path.Join(localDependenciesDirectory, file)
+			destination := path.Join(localQuarkusDir, file)
+			_, err = CopyFile(source, destination)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func getRegularFileNamesInDir(directory string) ([]string, error) {
+	var dirFiles []string
+	files, err := ioutil.ReadDir(directory)
+	for _, file := range files {
+		fileName := file.Name()
+
+		// Do not include hidden files or sub-directories.
+		if !file.IsDir() && !strings.HasPrefix(fileName, ".") {
+			dirFiles = append(dirFiles, fileName)
+		}
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return dirFiles, nil
+}
+
+func CopyLibFiles(localDependenciesDirectory string, localLibDirectory string) error {
+	// Create directory if one does not already exist
+	err := CreateDirectory(localLibDirectory)
+	if err != nil {
+		return err
+	}
+
+	fileNames, err := getRegularFileNamesInDir(localDependenciesDirectory)
+	if err != nil {
+		return err
+	}
+
+	for _, dependencyJar := range fileNames {
+		source := path.Join(localDependenciesDirectory, dependencyJar)
+		destination := path.Join(localLibDirectory, dependencyJar)
+		_, err = CopyFile(source, destination)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func CopyAppFile(localDependenciesDirectory string, localAppDirectory string) error {
+	// Create directory if one does not already exist
+	err := CreateDirectory(localAppDirectory)
+	if err != nil {
+		return err
+	}
+
+	fileNames, err := getRegularFileNamesInDir(localDependenciesDirectory)
+	if err != nil {
+		return err
+	}
+
+	for _, dependencyJar := range fileNames {
+		if strings.HasPrefix(dependencyJar, "camel-k-integration-") {
+			source := path.Join(localDependenciesDirectory, dependencyJar)
+			destination := path.Join(localAppDirectory, dependencyJar)
+			_, err = CopyFile(source, destination)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }

@@ -108,9 +108,9 @@ func createBuilderTestEnv(cluster v1.IntegrationPlatformCluster, strategy v1.Int
 
 	kanikoCache := false
 	res := &Environment{
-		C:            context.TODO(),
+		Ctx:          context.TODO(),
 		CamelCatalog: c,
-		Catalog:      NewCatalog(context.TODO(), nil),
+		Catalog:      NewCatalog(nil),
 		Integration: &v1.Integration{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test",
@@ -130,7 +130,7 @@ func createBuilderTestEnv(cluster v1.IntegrationPlatformCluster, strategy v1.Int
 				Cluster: cluster,
 				Build: v1.IntegrationPlatformBuildSpec{
 					PublishStrategy:  strategy,
-					Registry:         v1.IntegrationPlatformRegistrySpec{Address: "registry"},
+					Registry:         v1.RegistrySpec{Address: "registry"},
 					RuntimeVersion:   defaults.DefaultRuntimeVersion,
 					RuntimeProvider:  v1.RuntimeProviderQuarkus,
 					KanikoBuildCache: &kanikoCache,
@@ -148,5 +148,23 @@ func createBuilderTestEnv(cluster v1.IntegrationPlatformCluster, strategy v1.Int
 }
 
 func NewBuilderTestCatalog() *Catalog {
-	return NewCatalog(context.TODO(), nil)
+	return NewCatalog(nil)
+}
+
+func TestMavenPropertyBuilderTrait(t *testing.T) {
+	env := createBuilderTestEnv(v1.IntegrationPlatformClusterKubernetes, v1.IntegrationPlatformBuildPublishStrategyKaniko)
+	builderTrait := createNominalBuilderTraitTest()
+	builderTrait.Properties = append(builderTrait.Properties, "build-time-prop1=build-time-value1")
+
+	err := builderTrait.Apply(env)
+
+	assert.Nil(t, err)
+	assert.Equal(t, "build-time-value1", env.BuildTasks[0].Builder.Maven.Properties["build-time-prop1"])
+}
+
+func createNominalBuilderTraitTest() *builderTrait {
+	builderTrait, _ := newBuilderTrait().(*builderTrait)
+	builderTrait.Enabled = BoolP(true)
+
+	return builderTrait
 }

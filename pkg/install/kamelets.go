@@ -35,10 +35,10 @@ import (
 	"github.com/apache/camel-k/pkg/util/kubernetes"
 )
 
-const kameletDirEnv = "KAMELET_CATALOG_DIR"
-const defaultKameletDir = "/kamelets/"
-const kameletBundledLabel = "camel.apache.org/kamelet.bundled"
-const kameletReadOnlyLabel = "camel.apache.org/kamelet.readonly"
+const (
+	kameletDirEnv     = "KAMELET_CATALOG_DIR"
+	defaultKameletDir = "/kamelets/"
+)
 
 // KameletCatalog installs the bundled KameletCatalog into one namespace
 func KameletCatalog(ctx context.Context, c client.Client, namespace string) error {
@@ -46,12 +46,14 @@ func KameletCatalog(ctx context.Context, c client.Client, namespace string) erro
 	if kameletDir == "" {
 		kameletDir = defaultKameletDir
 	}
-	if d, err := os.Stat(kameletDir); err != nil && os.IsNotExist(err) {
+	d, err := os.Stat(kameletDir)
+	switch {
+	case err != nil && os.IsNotExist(err):
 		return nil
-	} else if err != nil {
+	case err != nil:
 		return err
-	} else if !d.IsDir() {
-		return fmt.Errorf("Kamelet directory %q is a file", kameletDir)
+	case !d.IsDir():
+		return fmt.Errorf("kamelet directory %q is a file", kameletDir)
 	}
 
 	files, err := ioutil.ReadDir(kameletDir)
@@ -84,7 +86,7 @@ func KameletCatalog(ctx context.Context, c client.Client, namespace string) erro
 				}
 			}
 
-			if existing == nil || existing.Annotations[kamelVersionAnnotation] != defaults.Version {
+			if existing == nil || existing.Labels[v1alpha1.KameletBundledLabel] == "true" {
 				if k.GetAnnotations() == nil {
 					k.SetAnnotations(make(map[string]string))
 				}
@@ -93,11 +95,10 @@ func KameletCatalog(ctx context.Context, c client.Client, namespace string) erro
 				if k.GetLabels() == nil {
 					k.SetLabels(make(map[string]string))
 				}
-				k.GetLabels()[kameletBundledLabel] = "true"
-				k.GetLabels()[kameletReadOnlyLabel] = "true"
+				k.GetLabels()[v1alpha1.KameletBundledLabel] = "true"
+				k.GetLabels()[v1alpha1.KameletReadOnlyLabel] = "true"
 
 				err := ObjectOrCollect(ctx, c, namespace, nil, true, k)
-
 				if err != nil {
 					return errors.Wrapf(err, "could not create resource from file %q", path.Join(kameletDir, file.Name()))
 				}
@@ -111,8 +112,8 @@ func KameletCatalog(ctx context.Context, c client.Client, namespace string) erro
 
 // KameletViewerRole installs the role that allows any user ro access kamelets in the global namespace
 func KameletViewerRole(ctx context.Context, c client.Client, namespace string) error {
-	if err := Resource(ctx, c, namespace, true, IdentityResourceCustomizer, "/rbac/user-global-kamelet-viewer-role.yaml"); err != nil {
+	if err := Resource(ctx, c, namespace, true, IdentityResourceCustomizer, "/viewer/user-global-kamelet-viewer-role.yaml"); err != nil {
 		return err
 	}
-	return Resource(ctx, c, namespace, true, IdentityResourceCustomizer, "/rbac/user-global-kamelet-viewer-role-binding.yaml")
+	return Resource(ctx, c, namespace, true, IdentityResourceCustomizer, "/viewer/user-global-kamelet-viewer-role-binding.yaml")
 }

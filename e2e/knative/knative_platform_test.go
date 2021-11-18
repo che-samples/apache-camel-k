@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 // To enable compilation of this file in Goland, go to "Settings -> Go -> Vendoring & Build Tags -> Custom Tags" and add "integration"
@@ -33,7 +34,7 @@ import (
 
 	. "github.com/apache/camel-k/e2e/support"
 	"github.com/apache/camel-k/pkg/apis/camel/v1"
-	"github.com/apache/camel-k/pkg/util/flow"
+	"github.com/apache/camel-k/pkg/util/dsl"
 	"github.com/apache/camel-k/pkg/util/knative"
 )
 
@@ -57,10 +58,10 @@ func TestKnativePlatform(t *testing.T) {
 			// Change something in the integration to produce a redeploy
 			Expect(UpdateIntegration(ns, "yaml", func(it *v1.Integration) {
 				it.Spec.Profile = ""
-				content, err := flow.ToYamlDSL(it.Spec.Flows)
+				content, err := dsl.ToYamlDSL(it.Spec.Flows)
 				assert.NoError(t, err)
 				newData := strings.ReplaceAll(string(content), "string!", "string!!!")
-				newFlows, err := flow.FromYamlDSLString(newData)
+				newFlows, err := dsl.FromYamlDSLString(newData)
 				assert.NoError(t, err)
 				it.Spec.Flows = newFlows
 			})).To(Succeed())
@@ -70,7 +71,7 @@ func TestKnativePlatform(t *testing.T) {
 			Eventually(IntegrationPhase(ns, "yaml")).Should(Equal(v1.IntegrationPhaseRunning))
 			Eventually(IntegrationLogs(ns, "yaml"), TestTimeoutShort).Should(ContainSubstring("Magicstring!!!"))
 			// It should keep the old profile saved in status
-			Eventually(IntegrationProfile(ns, "yaml"), TestTimeoutMedium).Should(Equal(v1.TraitProfile(string(cluster))))
+			Eventually(IntegrationProfile(ns, "yaml"), TestTimeoutMedium).Should(Equal(v1.TraitProfile(cluster)))
 
 			Expect(Kamel("delete", "--all", "-n", ns).Execute()).To(Succeed())
 		})

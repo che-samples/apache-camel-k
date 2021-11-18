@@ -41,7 +41,7 @@ func newDependenciesTrait() Trait {
 }
 
 func (t *dependenciesTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		return false, nil
 	}
 
@@ -64,7 +64,7 @@ func (t *dependenciesTrait) Apply(e *Environment) error {
 		dependencies.Add(d.GetDependencyID())
 	}
 
-	sources, err := kubernetes.ResolveIntegrationSources(e.C, e.Client, e.Integration, e.Resources)
+	sources, err := kubernetes.ResolveIntegrationSources(e.Ctx, e.Client, e.Integration, e.Resources)
 	if err != nil {
 		return err
 	}

@@ -19,26 +19,31 @@ package trait
 
 import (
 	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 	"github.com/apache/camel-k/pkg/util/camel"
 	"github.com/apache/camel-k/pkg/util/kubernetes"
 	"github.com/apache/camel-k/pkg/util/test"
-	"github.com/stretchr/testify/assert"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"testing"
 )
 
 func createLoggingTestEnv(t *testing.T, color bool, json bool, jsonPrettyPrint bool, logLevel string, logFormat string) *Environment {
+	t.Helper()
+
 	c, err := camel.DefaultCatalog()
 	if err != nil {
 		panic(err)
 	}
 
 	res := &Environment{
-		C:            context.TODO(),
+		Ctx:          context.TODO(),
 		CamelCatalog: c,
-		Catalog:      NewCatalog(context.TODO(), nil),
+		Catalog:      NewCatalog(nil),
 		Integration: &v1.Integration{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test",
@@ -82,11 +87,13 @@ func createLoggingTestEnv(t *testing.T, color bool, json bool, jsonPrettyPrint b
 }
 
 func createDefaultLoggingTestEnv(t *testing.T) *Environment {
-	return createLoggingTestEnv(t, true, false, false, defaultLogLevel, defaultLogFormat)
+	t.Helper()
+
+	return createLoggingTestEnv(t, true, false, false, defaultLogLevel, "")
 }
 
 func NewLoggingTestCatalog() *Catalog {
-	return NewCatalog(context.TODO(), nil)
+	return NewCatalog(nil)
 }
 
 func TestEmptyLoggingTrait(t *testing.T) {
@@ -109,13 +116,13 @@ func TestEmptyLoggingTrait(t *testing.T) {
 			}
 		}
 
-		if e.Name == envVarQuarkusLogConsoleJson {
+		if e.Name == envVarQuarkusLogConsoleJSON {
 			if e.Value == "true" {
 				jsonFormat = true
 			}
 		}
 
-		if e.Name == envVarQuarkusLogConsoleJsonPrettyPrint {
+		if e.Name == envVarQuarkusLogConsoleJSONPrettyPrint {
 			if e.Value == "true" {
 				jsonPrettyPrint = true
 			}
@@ -161,13 +168,13 @@ func TestJsonLoggingTrait(t *testing.T) {
 			}
 		}
 
-		if e.Name == envVarQuarkusLogConsoleJson {
+		if e.Name == envVarQuarkusLogConsoleJSON {
 			if e.Value == "true" {
 				jsonFormat = true
 			}
 		}
 
-		if e.Name == envVarQuarkusLogConsoleJsonPrettyPrint {
+		if e.Name == envVarQuarkusLogConsoleJSONPrettyPrint {
 			if e.Value == "true" {
 				jsonPrettyPrint = true
 			}

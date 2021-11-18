@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 // To enable compilation of this file in Goland, go to "Settings -> Go -> Vendoring & Build Tags -> Custom Tags" and add "integration"
@@ -39,7 +40,7 @@ func TestRunSimpleXmlExamples(t *testing.T) {
 		t.Run("run xml", func(t *testing.T) {
 			Expect(Kamel("run", "-n", ns, "files/xml.xml").Execute()).To(Succeed())
 			Eventually(IntegrationPodPhase(ns, "xml"), TestTimeoutMedium).Should(Equal(v1.PodRunning))
-			Eventually(IntegrationCondition(ns, "xml", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
+			Eventually(IntegrationConditionStatus(ns, "xml", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
 			Eventually(IntegrationLogs(ns, "xml"), TestTimeoutShort).Should(ContainSubstring("Magicstring!"))
 			Expect(Kamel("delete", "--all", "-n", ns).Execute()).To(Succeed())
 		})

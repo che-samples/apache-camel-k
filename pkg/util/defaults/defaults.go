@@ -23,10 +23,10 @@ package defaults
 
 const (
 	// Version --
-	Version = "1.5.0-SNAPSHOT"
+	Version = "1.8.0-SNAPSHOT"
 
 	// DefaultRuntimeVersion --
-	DefaultRuntimeVersion = "1.7.0"
+	DefaultRuntimeVersion = "1.10.0"
 
 	// BuildahVersion --
 	BuildahVersion = "1.14.0"
@@ -42,4 +42,10 @@ const (
 
 	// ImageName --
 	ImageName = "docker.io/apache/camel-k"
+
+	// installDefaultKamelets --
+	installDefaultKamelets = true
 )
+
+//GitCommit must be provided during application build
+var GitCommit string

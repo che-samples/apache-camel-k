@@ -36,10 +36,9 @@ import (
 	"k8s.io/client-go/discovery/cached/disk"
 	"k8s.io/client-go/discovery/cached/memory"
 
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
-	util "github.com/apache/camel-k/pkg/util/controller"
 )
 
 var (
@@ -73,7 +72,7 @@ func newGarbageCollectorTrait() Trait {
 }
 
 func (t *garbageCollectorTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		return false, nil
 	}
 
@@ -82,27 +81,25 @@ func (t *garbageCollectorTrait) Configure(e *Environment) (bool, error) {
 		t.DiscoveryCache = &s
 	}
 
-	return e.IntegrationInPhase(
-			v1.IntegrationPhaseInitialization,
-			v1.IntegrationPhaseDeploying,
-			v1.IntegrationPhaseRunning),
+	return e.IntegrationInPhase(v1.IntegrationPhaseInitialization) || e.IntegrationInRunningPhases(),
 		nil
 }
 
 func (t *garbageCollectorTrait) Apply(e *Environment) error {
 	switch e.Integration.Status.Phase {
 
-	case v1.IntegrationPhaseRunning:
+	case v1.IntegrationPhaseDeploying, v1.IntegrationPhaseRunning, v1.IntegrationPhaseError:
 		// Register a post action that deletes the existing resources that are labelled
 		// with the previous integration generations.
 		// TODO: this should be refined so that it's run when all the replicas for the newer generation
 		// are ready. This is to be added when the integration scale status is refined with ready replicas
 		e.PostActions = append(e.PostActions, func(env *Environment) error {
 			// The collection and deletion are performed asynchronously to avoid blocking
-			// the reconcile loop.
+			// the reconciliation loop.
 			go t.garbageCollectResources(env)
 			return nil
 		})
+
 		fallthrough
 
 	default:
@@ -152,14 +149,15 @@ func (t *garbageCollectorTrait) deleteEachOf(gvks map[schema.GroupVersionKind]st
 				"kind":       gvk.Kind,
 			},
 		}
-		options := []client.ListOption{
-			client.InNamespace(e.Integration.Namespace),
-			util.MatchingSelector{Selector: selector},
+		options := []ctrl.ListOption{
+			ctrl.InNamespace(e.Integration.Namespace),
+			ctrl.MatchingLabelsSelector{Selector: selector},
 		}
 		if err := t.Client.List(context.TODO(), &resources, options...); err != nil {
 			if !k8serrors.IsNotFound(err) && !k8serrors.IsForbidden(err) {
 				t.L.ForIntegration(e.Integration).Errorf(err, "cannot list child resources: %v", gvk)
 			}
+
 			continue
 		}
 
@@ -168,7 +166,7 @@ func (t *garbageCollectorTrait) deleteEachOf(gvks map[schema.GroupVersionKind]st
 			if !t.canBeDeleted(e, r) {
 				continue
 			}
-			err := t.Client.Delete(context.TODO(), &r, client.PropagationPolicy(metav1.DeletePropagationBackground))
+			err := t.Client.Delete(context.TODO(), &r, ctrl.PropagationPolicy(metav1.DeletePropagationBackground))
 			if err != nil {
 				// The resource may have already been deleted
 				if !k8serrors.IsNotFound(err) {

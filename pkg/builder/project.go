@@ -26,36 +26,33 @@ import (
 )
 
 func init() {
-	registerSteps(Steps)
+	registerSteps(Project)
+
+	Project.CommonSteps = []Step{
+		Project.CleanUpBuildDir,
+		Project.GenerateJavaKeystore,
+		Project.GenerateProjectSettings,
+		Project.InjectDependencies,
+		Project.SanitizeDependencies,
+	}
 }
 
-type steps struct {
+type projectSteps struct {
 	CleanUpBuildDir         Step
 	GenerateJavaKeystore    Step
 	GenerateProjectSettings Step
 	InjectDependencies      Step
 	SanitizeDependencies    Step
-	StandardImageContext    Step
-	IncrementalImageContext Step
+
+	CommonSteps []Step
 }
 
-var Steps = steps{
+var Project = projectSteps{
 	CleanUpBuildDir:         NewStep(ProjectGenerationPhase-1, cleanUpBuildDir),
 	GenerateJavaKeystore:    NewStep(ProjectGenerationPhase, generateJavaKeystore),
 	GenerateProjectSettings: NewStep(ProjectGenerationPhase+1, generateProjectSettings),
 	InjectDependencies:      NewStep(ProjectGenerationPhase+2, injectDependencies),
 	SanitizeDependencies:    NewStep(ProjectGenerationPhase+3, sanitizeDependencies),
-	StandardImageContext:    NewStep(ApplicationPackagePhase, standardImageContext),
-	IncrementalImageContext: NewStep(ApplicationPackagePhase, incrementalImageContext),
-}
-
-var DefaultSteps = []Step{
-	Steps.CleanUpBuildDir,
-	Steps.GenerateJavaKeystore,
-	Steps.GenerateProjectSettings,
-	Steps.InjectDependencies,
-	Steps.SanitizeDependencies,
-	Steps.IncrementalImageContext,
 }
 
 func cleanUpBuildDir(ctx *builderContext) error {
@@ -68,7 +65,7 @@ func cleanUpBuildDir(ctx *builderContext) error {
 		return err
 	}
 
-	return os.MkdirAll(ctx.Build.BuildDir, 0777)
+	return os.MkdirAll(ctx.Build.BuildDir, 0o777)
 }
 
 func generateJavaKeystore(ctx *builderContext) error {

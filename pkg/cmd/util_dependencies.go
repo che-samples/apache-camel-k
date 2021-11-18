@@ -18,6 +18,7 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -42,9 +43,12 @@ var additionalDependencyUsageMessage = `Additional top-level dependencies are sp
 <type>:<dependency-name>
 where <type> is one of {` + strings.Join(acceptedDependencyTypes, "|") + `}.`
 
-func getDependencies(args []string, additionalDependencies []string, repositories []string, allDependencies bool) ([]string, error) {
+func getDependencies(ctx context.Context, args []string, additionalDependencies []string, repositories []string, allDependencies bool) ([]string, error) {
 	// Fetch existing catalog or create new one if one does not already exist
-	catalog, err := createCamelCatalog()
+	catalog, err := createCamelCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Get top-level dependencies
 	dependencies, err := getTopLevelDependencies(catalog, args)
@@ -53,11 +57,7 @@ func getDependencies(args []string, additionalDependencies []string, repositorie
 	}
 
 	// Add additional user-provided dependencies
-	if additionalDependencies != nil {
-		for _, additionalDependency := range additionalDependencies {
-			dependencies = append(dependencies, additionalDependency)
-		}
-	}
+	dependencies = append(dependencies, additionalDependencies...)
 
 	// Compute transitive dependencies
 	if allDependencies {
@@ -67,7 +67,7 @@ func getDependencies(args []string, additionalDependencies []string, repositorie
 			util.StringSliceUniqueAdd(&dependencies, runtimeDep.GetDependencyID())
 		}
 
-		dependencies, err = getTransitiveDependencies(catalog, dependencies, repositories)
+		dependencies, err = getTransitiveDependencies(ctx, catalog, dependencies, repositories)
 		if err != nil {
 			return nil, err
 		}
@@ -101,32 +101,23 @@ func getTopLevelDependencies(catalog *camel.RuntimeCatalog, args []string) ([]st
 	return dependencies.List(), nil
 }
 
-func getTransitiveDependencies(
-	catalog *camel.RuntimeCatalog,
-	dependencies []string, repositories []string) ([]string, error) {
-
-	mvn := v1.MavenSpec{
-		LocalRepository: "",
-	}
-
-	// Create Maven project
+func getTransitiveDependencies(ctx context.Context, catalog *camel.RuntimeCatalog, dependencies []string, repositories []string) ([]string, error) {
 	project := builder.GenerateQuarkusProjectCommon(
 		catalog.CamelCatalogSpec.Runtime.Metadata["camel-quarkus.version"],
-		defaults.DefaultRuntimeVersion, catalog.CamelCatalogSpec.Runtime.Metadata["quarkus.version"])
+		defaults.DefaultRuntimeVersion,
+		catalog.CamelCatalogSpec.Runtime.Metadata["quarkus.version"],
+	)
 
-	// Inject dependencies into Maven project
 	err := camel.ManageIntegrationDependencies(&project, dependencies, catalog)
 	if err != nil {
 		return nil, err
 	}
 
-	// Maven local context to be used for generating the transitive dependencies
-	mc := maven.NewContext(util.MavenWorkingDirectory, project)
-	mc.LocalRepository = mvn.LocalRepository
-	mc.Timeout = mvn.GetTimeout().Duration
+	mc := maven.NewContext(util.MavenWorkingDirectory)
+	mc.LocalRepository = ""
 
 	if len(repositories) > 0 {
-		var repoList []maven.Repository
+		var repoList []v1.Repository
 		var mirrors []maven.Mirror
 		for i, repo := range repositories {
 			if strings.Contains(repo, "@mirrorOf=") {
@@ -155,7 +146,7 @@ func getTransitiveDependencies(
 	// Make maven command less verbose
 	mc.AdditionalArguments = append(mc.AdditionalArguments, "-q")
 
-	err = builder.BuildQuarkusRunnerCommon(mc)
+	err = builder.BuildQuarkusRunnerCommon(ctx, mc, project)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +158,7 @@ func getTransitiveDependencies(
 	}
 
 	// Dump dependencies in the dependencies directory and construct the list of dependencies
-	var transitiveDependencies []string
+	transitiveDependencies := []string{}
 	for _, entry := range artifacts {
 		transitiveDependencies = append(transitiveDependencies, entry.Location)
 	}
@@ -217,7 +208,7 @@ func getLocalBuildRoutes(integrationDirectory string) ([]string, error) {
 	return locallyBuiltRoutes, nil
 }
 
-func generateCatalog() (*camel.RuntimeCatalog, error) {
+func generateCatalog(ctx context.Context) (*camel.RuntimeCatalog, error) {
 	// A Camel catalog is required for this operation
 	settings := ""
 	mvn := v1.MavenSpec{
@@ -229,7 +220,7 @@ func generateCatalog() (*camel.RuntimeCatalog, error) {
 	}
 	var providerDependencies []maven.Dependency
 	var caCert []byte
-	catalog, err := camel.GenerateCatalogCommon(settings, caCert, mvn, runtime, providerDependencies)
+	catalog, err := camel.GenerateCatalogCommon(ctx, settings, caCert, mvn, runtime, providerDependencies)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +228,7 @@ func generateCatalog() (*camel.RuntimeCatalog, error) {
 	return catalog, nil
 }
 
-func createCamelCatalog() (*camel.RuntimeCatalog, error) {
+func createCamelCatalog(ctx context.Context) (*camel.RuntimeCatalog, error) {
 	// Attempt to reuse existing Camel catalog if one is present
 	catalog, err := camel.DefaultCatalog()
 	if err != nil {
@@ -246,7 +237,7 @@ func createCamelCatalog() (*camel.RuntimeCatalog, error) {
 
 	// Generate catalog if one was not found
 	if catalog == nil {
-		catalog, err = generateCatalog()
+		catalog, err = generateCatalog(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -294,7 +285,6 @@ func printDependencies(format string, dependencies []string) error {
 
 func validateFile(file string) error {
 	fileExists, err := util.FileExists(file)
-
 	if err != nil {
 		return err
 	}
@@ -320,12 +310,10 @@ func validateFiles(args []string) error {
 
 func validateAdditionalDependencies(additionalDependencies []string) error {
 	// Validate list of additional dependencies i.e. make sure that each dependency has a valid type
-	if additionalDependencies != nil {
-		for _, additionalDependency := range additionalDependencies {
-			isValid := validateDependency(additionalDependency)
-			if !isValid {
-				return errors.New("Unexpected type for user-provided dependency: " + additionalDependency + ". " + additionalDependencyUsageMessage)
-			}
+	for _, additionalDependency := range additionalDependencies {
+		isValid := validateDependency(additionalDependency)
+		if !isValid {
+			return errors.New("Unexpected type for user-provided dependency: " + additionalDependency + ". " + additionalDependencyUsageMessage)
 		}
 	}
 
@@ -352,8 +340,7 @@ func validateIntegrationFiles(args []string) error {
 	}
 
 	// Validate integration files.
-	err := validateFiles(args)
-	if err != nil {
+	if err := validateFiles(args); err != nil {
 		return err
 	}
 
@@ -362,15 +349,23 @@ func validateIntegrationFiles(args []string) error {
 
 func validatePropertyFiles(propertyFiles []string) error {
 	for _, fileName := range propertyFiles {
-		if !strings.HasSuffix(fileName, ".properties") {
-			return fmt.Errorf("supported property files must have a .properties extension: %s", fileName)
+		if err := validatePropertyFile(fileName); err != nil {
+			return err
 		}
+	}
 
-		if file, err := os.Stat(fileName); err != nil {
-			return errors.Wrapf(err, "unable to access property file %s", fileName)
-		} else if file.IsDir() {
-			return fmt.Errorf("property file %s is a directory", fileName)
-		}
+	return nil
+}
+
+func validatePropertyFile(fileName string) error {
+	if !strings.HasSuffix(fileName, ".properties") {
+		return fmt.Errorf("supported property files must have a .properties extension: %s", fileName)
+	}
+
+	if file, err := os.Stat(fileName); err != nil {
+		return errors.Wrapf(err, "unable to access property file %s", fileName)
+	} else if file.IsDir() {
+		return fmt.Errorf("property file %s is a directory", fileName)
 	}
 
 	return nil
@@ -385,7 +380,7 @@ func updateIntegrationProperties(properties []string, propertyFiles []string, ha
 	}
 
 	// Relocate properties files to this integration's property directory.
-	var relocatedPropertyFiles []string
+	relocatedPropertyFiles := []string{}
 	for _, propertyFile := range propertyFiles {
 		relocatedPropertyFile := path.Join(util.GetLocalPropertiesDir(), path.Base(propertyFile))
 		_, err = util.CopyFile(propertyFile, relocatedPropertyFile)
@@ -399,7 +394,7 @@ func updateIntegrationProperties(properties []string, propertyFiles []string, ha
 		// Output list of properties to property file if any CLI properties were given.
 		if len(properties) > 0 {
 			propertyFilePath := path.Join(util.GetLocalPropertiesDir(), "CLI.properties")
-			err = ioutil.WriteFile(propertyFilePath, []byte(strings.Join(properties, "\n")), 0777)
+			err = ioutil.WriteFile(propertyFilePath, []byte(strings.Join(properties, "\n")), 0o777)
 			if err != nil {
 				return nil, err
 			}
@@ -452,6 +447,42 @@ func updateIntegrationRoutes(routes []string) error {
 	return nil
 }
 
+func updateQuarkusDirectory() error {
+	err := util.CreateLocalQuarkusDirectory()
+	if err != nil {
+		return err
+	}
+
+	// ignore error if custom dir doesn't exist
+	_ = util.CopyQuarkusAppFiles(util.CustomQuarkusDirectoryName, util.GetLocalQuarkusDir())
+
+	return nil
+}
+
+func updateAppDirectory() error {
+	err := util.CreateLocalAppDirectory()
+	if err != nil {
+		return err
+	}
+
+	// ignore error if custom dir doesn't exist
+	_ = util.CopyAppFile(util.CustomAppDirectoryName, util.GetLocalAppDir())
+
+	return nil
+}
+
+func updateLibDirectory() error {
+	err := util.CreateLocalLibDirectory()
+	if err != nil {
+		return err
+	}
+
+	// ignore error if custom dir doesn't exist
+	_ = util.CopyLibFiles(util.CustomLibDirectoryName, util.GetLocalLibDir())
+
+	return nil
+}
+
 func createMavenWorkingDirectory() error {
 	// Create local Maven context
 	temporaryDirectory, err := ioutil.TempDir(os.TempDir(), "maven-")
@@ -482,4 +513,57 @@ func getCustomPropertiesDir(integrationDirectory string) string {
 
 func getCustomRoutesDir(integrationDirectory string) string {
 	return path.Join(integrationDirectory, "routes")
+}
+
+func getCustomQuarkusDir() (string, error) {
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return path.Join(currentDir, "quarkus"), nil
+}
+
+func getCustomLibDir() (string, error) {
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return path.Join(currentDir, "lib/main"), nil
+}
+
+func getCustomAppDir() (string, error) {
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return path.Join(currentDir, "app"), nil
+}
+
+func deleteLocalIntegrationDirs() error {
+	directory, err := getCustomQuarkusDir()
+	if err != nil {
+		return err
+	}
+
+	err = os.RemoveAll(directory)
+	if err != nil {
+		return err
+	}
+
+	err = os.RemoveAll("lib")
+	if err != nil {
+		return err
+	}
+
+	directory, err = getCustomAppDir()
+	if err != nil {
+		return err
+	}
+
+	err = os.RemoveAll(directory)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

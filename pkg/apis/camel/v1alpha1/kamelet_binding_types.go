@@ -33,9 +33,11 @@ type KameletBindingSpec struct {
 	// Sink is the destination of the integration defined by this binding
 	Sink Endpoint `json:"sink,omitempty"`
 	// ErrorHandler is an optional handler called upon an error occuring in the integration
-	ErrorHandler ErrorHandlerSpec `json:"errorHandler,omitempty"`
+	ErrorHandler *ErrorHandlerSpec `json:"errorHandler,omitempty"`
 	// Steps contains an optional list of intermediate steps that are executed between the Source and the Sink
 	Steps []Endpoint `json:"steps,omitempty"`
+	// Replicas is the number of desired replicas for the binding
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 // Endpoint represents a source/sink external entity
@@ -70,6 +72,10 @@ type KameletBindingStatus struct {
 	Phase KameletBindingPhase `json:"phase,omitempty"`
 	// Conditions --
 	Conditions []KameletBindingCondition `json:"conditions,omitempty"`
+	// Replicas is the number of actual replicas of the binding
+	Replicas *int32 `json:"replicas,omitempty"`
+	// Selector allows to identify pods belonging to the binding
+	Selector string `json:"selector,omitempty"`
 }
 
 // KameletBindingCondition describes the state of a resource at a certain point.
@@ -115,7 +121,11 @@ const (
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=kameletbindings,scope=Namespaced,shortName=klb,categories=kamel;camel
 // +kubebuilder:subresource:status
+// +genclient:method=GetScale,verb=get,subresource=scale,result=k8s.io/api/autoscaling/v1.Scale
+// +genclient:method=UpdateScale,verb=update,subresource=scale,input=k8s.io/api/autoscaling/v1.Scale,result=k8s.io/api/autoscaling/v1.Scale
+// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,description="The Kamelet Binding phase"
+// +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`,description="The number of pods"
 
 // KameletBinding is the Schema for the kamelets binding API
 type KameletBinding struct {

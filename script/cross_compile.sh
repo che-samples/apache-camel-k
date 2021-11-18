@@ -22,13 +22,14 @@ rm -rf ${builddir}
 
 basename=camel-k-client
 
-if [ "$#" -ne 2 ]; then
-    echo "usage: $0 version build_flags"
+if [ "$#" -lt 2 ]; then
+    echo "usage: $0 <version> <build_flags...>"
     exit 1
 fi
 
 version=$1
-build_flags=$2
+shift
+build_flags="$*"
 
 cross_compile () {
 	local label=$1
@@ -42,7 +43,7 @@ cross_compile () {
 	fi
 
 	targetdir=${builddir}/${label}
-	eval go build "$build_flags" -o ${targetdir}/kamel${extension} ./cmd/kamel/...
+	eval go build $build_flags -o ${targetdir}/kamel${extension} ./cmd/kamel/...
 
 	if [ -n "$GPG_PASS" ]; then
 	    gpg --output ${targetdir}/kamel${extension}.asc --armor --detach-sig --passphrase ${GPG_PASS} ${targetdir}/kamel${extension}
@@ -53,11 +54,12 @@ cross_compile () {
 	cp ${location}/../LICENSE ${targetdir}/
 	cp ${location}/../NOTICE ${targetdir}/
 
-	pushd . && cd ${targetdir} && tar -zcvf ../../${label}.tar.gz . && popd
+	pushd . && cd ${targetdir} && tar -zcvf ../../${label}.tar.gz $(ls -A) && popd
 }
 
 cross_compile ${basename}-${version}-linux-64bit linux amd64
 cross_compile ${basename}-${version}-mac-64bit darwin amd64
+cross_compile ${basename}-${version}-mac-arm64bit darwin arm64
 cross_compile ${basename}-${version}-windows-64bit windows amd64
 
 

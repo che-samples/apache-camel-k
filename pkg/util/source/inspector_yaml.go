@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
+	"github.com/apache/camel-k/pkg/util/uri"
 	yaml2 "gopkg.in/yaml.v2"
 )
 
@@ -48,6 +49,7 @@ func (i YAMLInspector) Extract(source v1.SourceSpec, meta *Metadata) error {
 
 	i.discoverCapabilities(source, meta)
 	i.discoverDependencies(source, meta)
+	i.discoverKamelets(source, meta)
 
 	meta.ExposesHTTPServices = meta.ExposesHTTPServices || i.containsHTTPURIs(meta.FromURIs)
 	meta.PassiveEndpoints = i.hasOnlyPassiveEndpoints(meta.FromURIs)
@@ -57,15 +59,6 @@ func (i YAMLInspector) Extract(source v1.SourceSpec, meta *Metadata) error {
 
 func (i YAMLInspector) parseStep(key string, content interface{}, meta *Metadata) error {
 	switch key {
-	case "route":
-		// process steps if they are defined in the route
-		if routeSteps, ok := content.(map[interface{}]interface{}); ok {
-			if steps, stepsFormatOk := routeSteps["steps"].([]interface{}); stepsFormatOk {
-				if err := i.parseStepsParam(steps, meta); err != nil {
-					return err
-				}
-			}
-		}
 	case "rest":
 		meta.ExposesHTTPServices = true
 		meta.RequiredCapabilities.Add(v1.CapabilityRest)
@@ -76,7 +69,7 @@ func (i YAMLInspector) parseStep(key string, content interface{}, meta *Metadata
 	case "marshal":
 		if cm, ok := content.(map[interface{}]interface{}); ok {
 			if js, jsOk := cm["json"]; jsOk {
-				dataFormatID := defaultJsonDataFormat
+				dataFormatID := defaultJSONDataFormat
 				if jsContent, jsContentOk := js.(map[interface{}]interface{}); jsContentOk {
 					if lib, libOk := jsContent["library"]; libOk {
 						dataFormatID = strings.ToLower(fmt.Sprintf("json-%s", lib))
@@ -87,6 +80,13 @@ func (i YAMLInspector) parseStep(key string, content interface{}, meta *Metadata
 				}
 			}
 		}
+	case "kamelet":
+		switch t := content.(type) {
+		case string:
+			AddKamelet(meta, "kamelet:"+t)
+		case map[interface{}]interface{}:
+			AddKamelet(meta, "kamelet:"+t["name"].(string))
+		}
 	}
 
 	var maybeURI string
@@ -95,40 +95,62 @@ func (i YAMLInspector) parseStep(key string, content interface{}, meta *Metadata
 	case string:
 		maybeURI = t
 	case map[interface{}]interface{}:
-		if u, ok := t["rest"]; ok {
-			return i.parseStep("rest", u, meta)
-		} else if u, ok := t["from"]; ok {
-			return i.parseStep("from", u, meta)
-		} else if u, ok := t["steps"]; ok {
-			if steps, stepsFormatOk := u.([]interface{}); stepsFormatOk {
-				if err := i.parseStepsParam(steps, meta); err != nil {
-					return err
-				}
-			}
-		}
+		for k, v := range t {
 
-		if u, ok := t["uri"]; ok {
-			if v, isString := u.(string); isString {
-				maybeURI = v
-			}
-		}
-
-		if _, ok := t["language"]; ok {
-			if s, ok := t["language"].(string); ok {
-				if dependency, ok := i.catalog.GetLanguageDependency(s); ok {
-					i.addDependency(dependency, meta)
-				}
-			} else if m, ok := t["language"].(map[interface{}]interface{}); ok {
-				if err := i.parseStep("language", m, meta); err != nil {
-					return err
-				}
-			}
-		}
-
-		for k := range t {
 			if s, ok := k.(string); ok {
 				if dependency, ok := i.catalog.GetLanguageDependency(s); ok {
 					i.addDependency(dependency, meta)
+				}
+			}
+
+			switch k {
+			case "steps":
+				if steps, stepsFormatOk := v.([]interface{}); stepsFormatOk {
+					if err := i.parseStepsParam(steps, meta); err != nil {
+						return err
+					}
+				}
+			case "uri":
+				if vv, isString := v.(string); isString {
+					builtURI := vv
+					// Inject parameters into URIs to allow other parts of the operator to inspect them
+					if params, pok := t["parameters"]; pok {
+						if paramMap, pmok := params.(map[interface{}]interface{}); pmok {
+							params := make(map[string]string, len(paramMap))
+							for k, v := range paramMap {
+								ks := fmt.Sprintf("%v", k)
+								vs := fmt.Sprintf("%v", v)
+								params[ks] = vs
+							}
+							builtURI = uri.AppendParameters(builtURI, params)
+						}
+					}
+					maybeURI = builtURI
+				}
+			case "language":
+				if s, ok := v.(string); ok {
+					if dependency, ok := i.catalog.GetLanguageDependency(s); ok {
+						i.addDependency(dependency, meta)
+					}
+				} else if m, ok := v.(map[interface{}]interface{}); ok {
+					if err := i.parseStep("language", m, meta); err != nil {
+						return err
+					}
+				}
+			default:
+				// Always follow children because from/to uris can be nested
+				if ks, ok := k.(string); ok {
+					if _, ok := v.(map[interface{}]interface{}); ok {
+						if err := i.parseStep(ks, v, meta); err != nil {
+							return err
+						}
+					} else if ls, ok := v.([]interface{}); ok {
+						for _, el := range ls {
+							if err := i.parseStep(ks, el, meta); err != nil {
+								return err
+							}
+						}
+					}
 				}
 			}
 		}
@@ -145,6 +167,7 @@ func (i YAMLInspector) parseStep(key string, content interface{}, meta *Metadata
 	return nil
 }
 
+// TODO nolint: gocyclo
 func (i YAMLInspector) parseStepsParam(steps []interface{}, meta *Metadata) error {
 	for _, raw := range steps {
 		if step, stepFormatOk := raw.(map[interface{}]interface{}); stepFormatOk {

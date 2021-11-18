@@ -535,13 +535,22 @@ func (in *KameletBindingSpec) DeepCopyInto(out *KameletBindingSpec) {
 	}
 	in.Source.DeepCopyInto(&out.Source)
 	in.Sink.DeepCopyInto(&out.Sink)
-	in.ErrorHandler.DeepCopyInto(&out.ErrorHandler)
+	if in.ErrorHandler != nil {
+		in, out := &in.ErrorHandler, &out.ErrorHandler
+		*out = new(ErrorHandlerSpec)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Steps != nil {
 		in, out := &in.Steps, &out.Steps
 		*out = make([]Endpoint, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
+	}
+	if in.Replicas != nil {
+		in, out := &in.Replicas, &out.Replicas
+		*out = new(int32)
+		**out = **in
 	}
 }
 
@@ -564,6 +573,11 @@ func (in *KameletBindingStatus) DeepCopyInto(out *KameletBindingStatus) {
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
+	}
+	if in.Replicas != nil {
+		in, out := &in.Replicas, &out.Replicas
+		*out = new(int32)
+		**out = **in
 	}
 }
 
@@ -655,6 +669,11 @@ func (in *KameletSpec) DeepCopyInto(out *KameletSpec) {
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
+	}
+	if in.Template != nil {
+		in, out := &in.Template, &out.Template
+		*out = new(v1.Template)
+		(*in).DeepCopyInto(*out)
 	}
 	if in.Flow != nil {
 		in, out := &in.Flow, &out.Flow

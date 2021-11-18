@@ -33,6 +33,7 @@ import (
 // See https://jolokia.org/reference/html/agents.html
 //
 // +camel-k:trait=jolokia
+// nolint: tagliatelle
 type jolokiaTrait struct {
 	BaseTrait `property:",squash"`
 	// The PEM encoded CA certification file path, used to verify client certificates,
@@ -75,11 +76,11 @@ func newJolokiaTrait() Trait {
 }
 
 func (t *jolokiaTrait) Configure(e *Environment) (bool, error) {
-	return t.Enabled != nil && *t.Enabled && e.IntegrationInPhase(
-		v1.IntegrationPhaseInitialization,
-		v1.IntegrationPhaseDeploying,
-		v1.IntegrationPhaseRunning,
-	), nil
+	if IsNilOrFalse(t.Enabled) {
+		return false, nil
+	}
+
+	return e.IntegrationInPhase(v1.IntegrationPhaseInitialization) || e.IntegrationInRunningPhases(), nil
 }
 
 func (t *jolokiaTrait) Apply(e *Environment) (err error) {
@@ -87,19 +88,18 @@ func (t *jolokiaTrait) Apply(e *Environment) (err error) {
 		// Add the Camel management and Jolokia agent dependencies
 		// Also add the Camel JAXB dependency, that's required by Hawtio
 
-		switch e.CamelCatalog.Runtime.Provider {
-		case v1.RuntimeProviderQuarkus:
-			util.StringSliceUniqueAdd(&e.Integration.Status.Dependencies, "mvn:org.apache.camel.quarkus:camel-quarkus-management")
+		if e.CamelCatalog.Runtime.Provider == v1.RuntimeProviderQuarkus {
+			util.StringSliceUniqueAdd(&e.Integration.Status.Dependencies, "camel-quarkus:management")
 			util.StringSliceUniqueAdd(&e.Integration.Status.Dependencies, "camel:jaxb")
 		}
 
 		// TODO: We may want to make the Jolokia version configurable
-		util.StringSliceUniqueAdd(&e.Integration.Status.Dependencies, "mvn:org.jolokia:jolokia-jvm:jar:agent:1.6.2")
+		util.StringSliceUniqueAdd(&e.Integration.Status.Dependencies, "mvn:org.jolokia:jolokia-jvm:jar:1.7.1")
 
 		return nil
 	}
 
-	container := e.getIntegrationContainer()
+	container := e.GetIntegrationContainer()
 	if container == nil {
 		e.Integration.Status.SetCondition(
 			v1.IntegrationConditionJolokiaAvailable,
@@ -153,7 +153,7 @@ func (t *jolokiaTrait) Apply(e *Environment) (err error) {
 		optionValues[i] = k + "=" + options[k]
 	}
 
-	container.Args = append(container.Args, "-javaagent:dependencies/lib/main/org.jolokia.jolokia-jvm-1.6.2-agent.jar="+strings.Join(optionValues, ","))
+	container.Args = append(container.Args, "-javaagent:dependencies/lib/main/org.jolokia.jolokia-jvm-1.7.1.jar="+strings.Join(optionValues, ","))
 
 	containerPort := corev1.ContainerPort{
 		Name:          "jolokia",
@@ -181,22 +181,22 @@ func (t *jolokiaTrait) setDefaultJolokiaOption(options map[string]string, option
 	switch o := option.(type) {
 	case **bool:
 		if *o == nil {
-			v := value.(bool)
+			v, _ := value.(bool)
 			*o = &v
 		}
 	case **int:
 		if *o == nil {
-			v := value.(int)
+			v, _ := value.(int)
 			*o = &v
 		}
 	case **string:
 		if *o == nil {
-			v := value.(string)
+			v, _ := value.(string)
 			*o = &v
 		}
 	case *[]string:
 		if len(*o) == 0 {
-			*o = value.([]string)
+			*o, _ = value.([]string)
 		}
 	}
 }

@@ -20,18 +20,19 @@ package cmd
 import (
 	"testing"
 
-	"github.com/apache/camel-k/pkg/util/olm"
-	"github.com/apache/camel-k/pkg/util/test"
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
-
-	"github.com/stretchr/testify/assert"
+	"github.com/apache/camel-k/pkg/util/test"
 )
 
 const cmdInstall = "install"
 
+// nolint: unparam
 func initializeInstallCmdOptions(t *testing.T) (*installCmdOptions, *cobra.Command, RootCmdOptions) {
+	t.Helper()
+
 	options, rootCmd := kamelTestPreAddCommandInit()
 	installCmdOptions := addTestInstallCmd(*options, rootCmd)
 	kamelTestPostAddCommandInit(t, rootCmd)
@@ -40,7 +41,7 @@ func initializeInstallCmdOptions(t *testing.T) (*installCmdOptions, *cobra.Comma
 }
 
 func addTestInstallCmd(options RootCmdOptions, rootCmd *cobra.Command) *installCmdOptions {
-	//add a testing version of install Command
+	// Add a testing version of install Command
 	installCmd, installOptions := newCmdInstall(&options)
 	installCmd.RunE = func(c *cobra.Command, args []string) error {
 		return nil
@@ -57,7 +58,7 @@ func TestInstallNoFlag(t *testing.T) {
 	installCmdOptions, rootCmd, _ := initializeInstallCmdOptions(t)
 	_, err := test.ExecuteCommand(rootCmd, cmdInstall)
 	assert.Nil(t, err)
-	//Check default expected values
+	// Check default expected values
 	assert.Equal(t, false, installCmdOptions.Wait)
 	assert.Equal(t, false, installCmdOptions.ClusterSetupOnly)
 	assert.Equal(t, false, installCmdOptions.SkipOperatorSetup)
@@ -68,12 +69,12 @@ func TestInstallNoFlag(t *testing.T) {
 	assert.Equal(t, false, installCmdOptions.Save)
 	assert.Equal(t, false, installCmdOptions.Force)
 	assert.Equal(t, true, installCmdOptions.Olm)
-	assert.Equal(t, olm.DefaultOperatorName, installCmdOptions.olmOptions.OperatorName)
-	assert.Equal(t, olm.DefaultPackage, installCmdOptions.olmOptions.Package)
-	assert.Equal(t, olm.DefaultChannel, installCmdOptions.olmOptions.Channel)
-	assert.Equal(t, olm.DefaultSource, installCmdOptions.olmOptions.Source)
-	assert.Equal(t, olm.DefaultSourceNamespace, installCmdOptions.olmOptions.SourceNamespace)
-	assert.Equal(t, olm.DefaultGlobalNamespace, installCmdOptions.olmOptions.GlobalNamespace)
+	assert.Equal(t, "", installCmdOptions.olmOptions.OperatorName)
+	assert.Equal(t, "", installCmdOptions.olmOptions.Package)
+	assert.Equal(t, "", installCmdOptions.olmOptions.Channel)
+	assert.Equal(t, "", installCmdOptions.olmOptions.Source)
+	assert.Equal(t, "", installCmdOptions.olmOptions.SourceNamespace)
+	assert.Equal(t, "", installCmdOptions.olmOptions.GlobalNamespace)
 	assert.Equal(t, int32(8081), installCmdOptions.HealthPort)
 	assert.Equal(t, false, installCmdOptions.Monitoring)
 	assert.Equal(t, int32(8080), installCmdOptions.MonitoringPort)
@@ -154,6 +155,7 @@ func TestInstallHealthFlag(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, int32(7777), installCmdOptions.HealthPort)
 }
+
 func TestInstallHttpProxySecretFlag(t *testing.T) {
 	installCmdOptions, rootCmd, _ := initializeInstallCmdOptions(t)
 	_, err := test.ExecuteCommand(rootCmd, cmdInstall, "--http-proxy-secret", "someString")
@@ -170,9 +172,9 @@ func TestInstallKanikoBuildCacheFlag(t *testing.T) {
 
 func TestInstallLocalRepositoryFlag(t *testing.T) {
 	installCmdOptions, rootCmd, _ := initializeInstallCmdOptions(t)
-	_, err := test.ExecuteCommand(rootCmd, cmdInstall, "--local-repository", "someString")
+	_, err := test.ExecuteCommand(rootCmd, cmdInstall, "--maven-local-repository", "someString")
 	assert.Nil(t, err)
-	assert.Equal(t, "someString", installCmdOptions.LocalRepository)
+	assert.Equal(t, "someString", installCmdOptions.MavenLocalRepository)
 }
 
 func TestInstallMavenRepositoryFlag(t *testing.T) {
@@ -254,11 +256,11 @@ func TestInstallOutputFlag(t *testing.T) {
 func TestInstallPropertyFlag(t *testing.T) {
 	installCmdOptions, rootCmd, _ := initializeInstallCmdOptions(t)
 	_, err := test.ExecuteCommand(rootCmd, cmdInstall,
-		"--property", "someString1",
-		"--property", "someString2")
+		"--maven-property", "someString1",
+		"--maven-property", "someString2")
 	assert.Nil(t, err)
-	assert.Equal(t, "someString1", installCmdOptions.Properties[0])
-	assert.Equal(t, "someString2", installCmdOptions.Properties[1])
+	assert.Equal(t, "someString1", installCmdOptions.MavenProperties[0])
+	assert.Equal(t, "someString2", installCmdOptions.MavenProperties[1])
 }
 
 func TestInstallRegistryFlag(t *testing.T) {
@@ -315,6 +317,13 @@ func TestInstallSkipOperatorSetupFlag(t *testing.T) {
 	assert.Equal(t, true, installCmdOptions.SkipOperatorSetup)
 }
 
+func TestInstallSkipRegistrySetupFlag(t *testing.T) {
+	installCmdOptions, rootCmd, _ := initializeInstallCmdOptions(t)
+	_, err := test.ExecuteCommand(rootCmd, cmdInstall, "--skip-registry-setup")
+	assert.Nil(t, err)
+	assert.Equal(t, true, installCmdOptions.SkipRegistrySetup)
+}
+
 func TestInstallTraitProfileFlag(t *testing.T) {
 	installCmdOptions, rootCmd, _ := initializeInstallCmdOptions(t)
 	_, err := test.ExecuteCommand(rootCmd, cmdInstall, "--trait-profile", "someString")
@@ -333,9 +342,7 @@ func TestDecodeMavenSettings(t *testing.T) {
 	var err error
 	var val v1.ValueSource
 
-	//
 	// ConfigMap
-	//
 	val, err = decodeMavenSettings("configmap:maven-settings/s.xml")
 	assert.Nil(t, err)
 	assert.Nil(t, val.SecretKeyRef)
@@ -348,9 +355,7 @@ func TestDecodeMavenSettings(t *testing.T) {
 	assert.Equal(t, "maven-settings", val.ConfigMapKeyRef.Name)
 	assert.Empty(t, val.ConfigMapKeyRef.Key)
 
-	//
 	// Secrets
-	//
 	val, err = decodeMavenSettings("secret:maven-settings-secret/s.xml")
 	assert.Nil(t, err)
 	assert.Nil(t, val.ConfigMapKeyRef)
@@ -363,9 +368,7 @@ func TestDecodeMavenSettings(t *testing.T) {
 	assert.Equal(t, "maven-settings-secret", val.SecretKeyRef.Name)
 	assert.Empty(t, val.SecretKeyRef.Key)
 
-	//
 	// Errors
-	//
 	_, err = decodeMavenSettings("something:maven-settings-secret/s.xml")
 	assert.NotNil(t, err)
 	_, err = decodeMavenSettings("secret")
@@ -380,4 +383,12 @@ func TestInstallTolerationFlag(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, "key1=value1:NoSchedule", installCmdOptions.Tolerations[0])
 	assert.Equal(t, "key2=value2:NoExecute", installCmdOptions.Tolerations[1])
+}
+
+func TestInstallMavenExtension(t *testing.T) {
+	installCmdOptions, rootCmd, _ := initializeInstallCmdOptions(t)
+	_, err := test.ExecuteCommand(rootCmd, cmdInstall,
+		"--maven-extension", "fi.yle.tools:aws-maven:1.4.2")
+	assert.Nil(t, err)
+	assert.Equal(t, "fi.yle.tools:aws-maven:1.4.2", installCmdOptions.MavenExtensions[0])
 }

@@ -18,18 +18,34 @@ limitations under the License.
 package maven
 
 import (
+	"bytes"
 	"encoding/xml"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 	"github.com/apache/camel-k/pkg/util"
 )
 
 // DefaultMavenRepositories is a comma separated list of default maven repositories
 // This variable can be overridden at build time
 var DefaultMavenRepositories = "https://repo.maven.apache.org/maven2@id=central"
+
+func (s Settings) MarshalBytes() ([]byte, error) {
+	w := &bytes.Buffer{}
+	w.WriteString(xml.Header)
+
+	e := xml.NewEncoder(w)
+	e.Indent("", "  ")
+
+	if err := e.Encode(s); err != nil {
+		return []byte{}, err
+	}
+
+	return w.Bytes(), nil
+}
 
 func NewSettings() Settings {
 	return Settings{
@@ -40,10 +56,10 @@ func NewSettings() Settings {
 	}
 }
 
-func NewDefaultSettings(repositories []Repository, mirrors []Mirror) Settings {
+func NewDefaultSettings(repositories []v1.Repository, mirrors []Mirror) Settings {
 	settings := NewSettings()
 
-	var additionalRepos []Repository
+	var additionalRepos []v1.Repository
 	for _, defaultRepo := range defaultMavenRepositories() {
 		if !containsRepo(repositories, defaultRepo.ID) {
 			additionalRepos = append(additionalRepos, defaultRepo)
@@ -95,14 +111,14 @@ func SettingsConfigMap(namespace string, name string, settings Settings) (*corev
 	return cm, nil
 }
 
-func defaultMavenRepositories() (repos []Repository) {
+func defaultMavenRepositories() (repos []v1.Repository) {
 	for _, repoDesc := range strings.Split(DefaultMavenRepositories, ",") {
 		repos = append(repos, NewRepository(repoDesc))
 	}
 	return
 }
 
-func containsRepo(repositories []Repository, id string) bool {
+func containsRepo(repositories []v1.Repository, id string) bool {
 	for _, r := range repositories {
 		if r.ID == id {
 			return true

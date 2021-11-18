@@ -33,7 +33,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-/// Local Docker file system management functions.
+// Local Docker file system management functions.
 
 func createDockerBaseWorkingDirectory() error {
 	// Create local docker base directory.
@@ -82,7 +82,7 @@ func setDockerNetworkName(networkName string) {
 }
 
 func setDockerEnvVars(envVars []string) {
-	if envVars != nil && len(envVars) > 0 {
+	if len(envVars) > 0 {
 		util.CLIEnvVars = envVars
 	}
 }
@@ -110,7 +110,7 @@ func createAndBuildBaseImage(ctx context.Context) error {
 }
 
 func createAndBuildIntegrationImage(ctx context.Context, containerRegistry string, justBaseImage bool, image string,
-	propertyFiles []string, dependencies []string, routes []string, stdout, stderr io.Writer) error {
+	propertyFiles []string, dependencies []string, routes []string, startsFromLocalFolder bool, stdout, stderr io.Writer) error {
 	// This ensures the Dockerfile for the base image will not end up in an undesired location.
 	if docker.BaseWorkingDirectory == "" {
 		return errors.New("base directory that holds the base image Dockerfile has not been set correctly")
@@ -156,6 +156,24 @@ func createAndBuildIntegrationImage(ctx context.Context, containerRegistry strin
 		return err
 	}
 
+	// Copy quarkus files in maven subdirectory
+	err = updateQuarkusDirectory()
+	if err != nil {
+		return err
+	}
+
+	// Copy app files in maven subdirectory
+	err = updateAppDirectory()
+	if err != nil {
+		return err
+	}
+
+	// Copy lib files in maven subdirectory
+	err = updateLibDirectory()
+	if err != nil {
+		return err
+	}
+
 	// Get integration run command to be run inside the container. This means the command
 	// has to be created with the paths which will be valid inside the container.
 	containerCmd, err := GetContainerIntegrationRunCommand(ctx, propertyFiles, dependencies, routes, stdout, stderr)
@@ -164,7 +182,7 @@ func createAndBuildIntegrationImage(ctx context.Context, containerRegistry strin
 	}
 
 	// Create the integration image Docker file.
-	err = docker.CreateIntegrationImageDockerFile(containerCmd)
+	err = docker.CreateIntegrationImageDockerFile(containerCmd, startsFromLocalFolder)
 	if err != nil {
 		return err
 	}
@@ -191,7 +209,7 @@ func createAndBuildIntegrationImage(ctx context.Context, containerRegistry strin
 func runIntegrationImage(ctx context.Context, image string, stdout, stderr io.Writer) error {
 	// Stop the child process before exiting
 	dockerCtx, cancel := context.WithCancel(ctx)
-	cs := make(chan os.Signal)
+	cs := make(chan os.Signal, 1)
 	signal.Notify(cs, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-cs

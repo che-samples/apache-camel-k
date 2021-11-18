@@ -22,7 +22,6 @@ import (
 	"net/url"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -33,7 +32,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 
-	eventing "knative.dev/eventing/pkg/apis/eventing/v1beta1"
+	eventing "knative.dev/eventing/pkg/apis/eventing/v1"
 	serving "knative.dev/serving/pkg/apis/serving/v1"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
@@ -78,8 +77,6 @@ type knativeTrait struct {
 	// Enables filtering on events based on the header "ce-knativehistory". Since this header has been removed in newer versions of
 	// Knative, filtering is disabled by default.
 	FilterSourceChannels *bool `property:"filter-source-channels" json:"filterSourceChannels,omitempty"`
-	// Enables Knative CamelSource pre 0.15 compatibility fixes (will be removed in future versions).
-	CamelSourceCompat *bool `property:"camel-source-compat" json:"camelSourceCompat,omitempty"`
 	// Allows binding the integration to a sink via a Knative SinkBinding resource.
 	// This can be used when the integration targets a single sink.
 	// It's enabled by default when the integration targets a single sink
@@ -107,18 +104,18 @@ func (t *knativeTrait) IsAllowedInProfile(profile v1.TraitProfile) bool {
 }
 
 func (t *knativeTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		return false, nil
 	}
 
-	if !e.IntegrationInPhase(v1.IntegrationPhaseInitialization, v1.IntegrationPhaseDeploying, v1.IntegrationPhaseRunning) {
+	if !e.IntegrationInPhase(v1.IntegrationPhaseInitialization) && !e.IntegrationInRunningPhases() {
 		return false, nil
 	}
 
-	if t.Auto == nil || *t.Auto {
+	if IsNilOrTrue(t.Auto) {
 		if len(t.ChannelSources) == 0 {
 			items := make([]string, 0)
-			sources, err := kubernetes.ResolveIntegrationSources(e.C, e.Client, e.Integration, e.Resources)
+			sources, err := kubernetes.ResolveIntegrationSources(e.Ctx, e.Client, e.Integration, e.Resources)
 			if err != nil {
 				return false, err
 			}
@@ -131,7 +128,7 @@ func (t *knativeTrait) Configure(e *Environment) (bool, error) {
 		}
 		if len(t.ChannelSinks) == 0 {
 			items := make([]string, 0)
-			sources, err := kubernetes.ResolveIntegrationSources(e.C, e.Client, e.Integration, e.Resources)
+			sources, err := kubernetes.ResolveIntegrationSources(e.Ctx, e.Client, e.Integration, e.Resources)
 			if err != nil {
 				return false, err
 			}
@@ -144,7 +141,7 @@ func (t *knativeTrait) Configure(e *Environment) (bool, error) {
 		}
 		if len(t.EndpointSources) == 0 {
 			items := make([]string, 0)
-			sources, err := kubernetes.ResolveIntegrationSources(e.C, e.Client, e.Integration, e.Resources)
+			sources, err := kubernetes.ResolveIntegrationSources(e.Ctx, e.Client, e.Integration, e.Resources)
 			if err != nil {
 				return false, err
 			}
@@ -157,7 +154,7 @@ func (t *knativeTrait) Configure(e *Environment) (bool, error) {
 		}
 		if len(t.EndpointSinks) == 0 {
 			items := make([]string, 0)
-			sources, err := kubernetes.ResolveIntegrationSources(e.C, e.Client, e.Integration, e.Resources)
+			sources, err := kubernetes.ResolveIntegrationSources(e.Ctx, e.Client, e.Integration, e.Resources)
 			if err != nil {
 				return false, err
 			}
@@ -170,7 +167,7 @@ func (t *knativeTrait) Configure(e *Environment) (bool, error) {
 		}
 		if len(t.EventSources) == 0 {
 			items := make([]string, 0)
-			sources, err := kubernetes.ResolveIntegrationSources(e.C, e.Client, e.Integration, e.Resources)
+			sources, err := kubernetes.ResolveIntegrationSources(e.Ctx, e.Client, e.Integration, e.Resources)
 			if err != nil {
 				return false, err
 			}
@@ -183,7 +180,7 @@ func (t *knativeTrait) Configure(e *Environment) (bool, error) {
 		}
 		if len(t.EventSinks) == 0 {
 			items := make([]string, 0)
-			sources, err := kubernetes.ResolveIntegrationSources(e.C, e.Client, e.Integration, e.Resources)
+			sources, err := kubernetes.ResolveIntegrationSources(e.Ctx, e.Client, e.Integration, e.Resources)
 			if err != nil {
 				return false, err
 			}
@@ -196,8 +193,7 @@ func (t *knativeTrait) Configure(e *Environment) (bool, error) {
 		}
 		if t.FilterSourceChannels == nil {
 			// Filtering is no longer used by default
-			filter := false
-			t.FilterSourceChannels = &filter
+			t.FilterSourceChannels = BoolP(false)
 		}
 		if t.SinkBinding == nil {
 			allowed := t.isSinkBindingAllowed(e)
@@ -209,30 +205,7 @@ func (t *knativeTrait) Configure(e *Environment) (bool, error) {
 }
 
 func (t *knativeTrait) Apply(e *Environment) error {
-	// To be removed when Knative CamelSources < 0.15 will no longer be supported
-	// Older versions of Knative Sources use a loader rather than an interceptor
-	if t.CamelSourceCompat == nil || *t.CamelSourceCompat {
-		for i, s := range e.Integration.Spec.Sources {
-			if s.Loader == "knative-source" {
-				s.Loader = ""
-				util.StringSliceUniqueAdd(&s.Interceptors, "knative-source")
-				e.Integration.Spec.Sources[i] = s
-			}
-		}
-	}
-	// End of temporary code
-
-	if e.IntegrationInPhase(v1.IntegrationPhaseInitialization) {
-		// Interceptor may have been set by a Knative CamelSource
-		if util.StringSliceExists(e.getAllInterceptors(), "knative-source") {
-			// Adding required libraries for Camel sources
-			util.StringSliceUniqueAdd(&e.Integration.Status.Dependencies, "mvn:org.apache.camel.k:camel-knative")
-			util.StringSliceUniqueAdd(&e.Integration.Status.Dependencies, "mvn:org.apache.camel.k:camel-k-knative")
-			util.StringSliceUniqueAdd(&e.Integration.Status.Dependencies, "mvn:org.apache.camel.k:camel-k-knative-producer")
-		}
-	}
-
-	if t.SinkBinding != nil && *t.SinkBinding {
+	if IsTrue(t.SinkBinding) {
 		util.StringSliceUniqueAdd(&e.Integration.Status.Dependencies, "mvn:org.apache.camel.k:camel-k-knative")
 	}
 
@@ -243,26 +216,11 @@ func (t *knativeTrait) Apply(e *Environment) error {
 		util.StringSliceUniqueAdd(&e.Integration.Status.Capabilities, v1.CapabilityPlatformHTTP)
 	}
 
-	if e.IntegrationInPhase(v1.IntegrationPhaseDeploying, v1.IntegrationPhaseRunning) {
+	if e.IntegrationInRunningPhases() {
 		env := knativeapi.NewCamelEnvironment()
 		if t.Configuration != "" {
 			if err := env.Deserialize(t.Configuration); err != nil {
 				return err
-			}
-		}
-
-		// Convert deprecated Host and Port fields to URL field
-		// Can be removed once CamelSource controller migrate to the new API
-		for i, service := range env.Services {
-			if service.URL == "" {
-				URL := "http://" + service.Host
-				if service.Port != nil {
-					URL = URL + ":" + strconv.Itoa(*service.Port)
-				}
-				service.URL = URL
-				service.Host = ""
-				service.Port = nil
-				env.Services[i] = service
 			}
 		}
 
@@ -305,7 +263,7 @@ func (t *knativeTrait) configureChannels(e *Environment, env *knativeapi.CamelEn
 				knativeapi.CamelMetaKnativeKind:       ref.Kind,
 				knativeapi.CamelMetaKnativeReply:      "false",
 			}
-			if t.FilterSourceChannels != nil && *t.FilterSourceChannels {
+			if IsTrue(t.FilterSourceChannels) {
 				meta[knativeapi.CamelMetaFilterPrefix+knativeHistoryHeader] = loc.Host
 			}
 			svc := knativeapi.CamelServiceDefinition{
@@ -326,7 +284,7 @@ func (t *knativeTrait) configureChannels(e *Environment, env *knativeapi.CamelEn
 		return err
 	}
 
-	if t.SinkBinding == nil || !*t.SinkBinding {
+	if IsNilOrFalse(t.SinkBinding) {
 		// Sinks
 		err = t.ifServiceMissingDo(e, env, t.ChannelSinks, knativeapi.CamelServiceTypeChannel, knativeapi.CamelEndpointKindSink,
 			func(ref *corev1.ObjectReference, serviceURI string, urlProvider func() (*url.URL, error)) error {
@@ -386,7 +344,7 @@ func (t *knativeTrait) configureEndpoints(e *Environment, env *knativeapi.CamelE
 	}
 
 	// Sinks
-	if t.SinkBinding == nil || !*t.SinkBinding {
+	if IsNilOrFalse(t.SinkBinding) {
 		err := t.ifServiceMissingDo(e, env, t.EndpointSinks, knativeapi.CamelServiceTypeEndpoint, knativeapi.CamelEndpointKindSink,
 			func(ref *corev1.ObjectReference, serviceURI string, urlProvider func() (*url.URL, error)) error {
 				loc, err := urlProvider()
@@ -444,7 +402,7 @@ func (t *knativeTrait) configureEvents(e *Environment, env *knativeapi.CamelEnvi
 	}
 
 	// Sinks
-	if t.SinkBinding == nil || !*t.SinkBinding {
+	if IsNilOrFalse(t.SinkBinding) {
 		err = t.ifServiceMissingDo(e, env, t.EventSinks, knativeapi.CamelServiceTypeEvent, knativeapi.CamelEndpointKindSink,
 			func(ref *corev1.ObjectReference, serviceURI string, urlProvider func() (*url.URL, error)) error {
 				loc, err := urlProvider()
@@ -485,7 +443,7 @@ func (t *knativeTrait) isSinkBindingAllowed(e *Environment) bool {
 }
 
 func (t *knativeTrait) configureSinkBinding(e *Environment, env *knativeapi.CamelEnvironment) error {
-	if t.SinkBinding == nil || !*t.SinkBinding {
+	if IsNilOrFalse(t.SinkBinding) {
 		return nil
 	}
 	var serviceType knativeapi.CamelServiceType
@@ -616,7 +574,7 @@ func (t *knativeTrait) withServiceDo(
 		if len(possibleRefs) == 1 {
 			actualRef = &possibleRefs[0]
 		} else {
-			actualRef, err = knativeutil.GetAddressableReference(t.Ctx, t.Client, possibleRefs, e.Integration.Namespace, ref.Name)
+			actualRef, err = knativeutil.GetAddressableReference(e.Ctx, t.Client, possibleRefs, e.Integration.Namespace, ref.Name)
 			if err != nil && k8serrors.IsNotFound(err) {
 				return errors.Errorf("cannot find %s", serviceType.ResourceDescription(ref.Name))
 			} else if err != nil {
@@ -625,7 +583,7 @@ func (t *knativeTrait) withServiceDo(
 		}
 
 		urlProvider := func() (*url.URL, error) {
-			targetURL, err := knativeutil.GetSinkURL(t.Ctx, t.Client, actualRef, e.Integration.Namespace)
+			targetURL, err := knativeutil.GetSinkURL(e.Ctx, t.Client, actualRef, e.Integration.Namespace)
 			if err != nil {
 				return nil, errors.Wrapf(err, "cannot determine address of %s", serviceType.ResourceDescription(ref.Name))
 			}

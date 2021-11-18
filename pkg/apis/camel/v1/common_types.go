@@ -22,10 +22,37 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	TraitAnnotationPrefix = "trait.camel.apache.org/"
+
+	OperatorIDAnnotation        = "camel.apache.org/operator.id"
+	SecondaryPlatformAnnotation = "camel.apache.org/secondary.platform"
+	PlatformSelectorAnnotation  = "camel.apache.org/platform.id"
+)
+
+// BuildStrategy specifies how the Build should be executed
+// +kubebuilder:validation:Enum=routine;pod
+type BuildStrategy string
+
+const (
+	// BuildStrategyRoutine performs the build in a routine
+	BuildStrategyRoutine BuildStrategy = "routine"
+	// BuildStrategyPod performs the build in a pod
+	BuildStrategyPod BuildStrategy = "pod"
+)
+
+var BuildStrategies = []BuildStrategy{
+	BuildStrategyRoutine,
+	BuildStrategyPod,
+}
+
 // ConfigurationSpec --
 type ConfigurationSpec struct {
-	Type  string `json:"type"`
-	Value string `json:"value"`
+	Type               string `json:"type"`
+	Value              string `json:"value"`
+	ResourceType       string `json:"resourceType,omitempty"`
+	ResourceMountPoint string `json:"resourceMountPoint,omitempty"`
+	ResourceKey        string `json:"resourceKey,omitempty"`
 }
 
 // Artifact --
@@ -61,30 +88,31 @@ type TraitConfiguration struct {
 	RawMessage `json:",inline"`
 }
 
-// RawMessage is a raw encoded JSON value.
-// It implements Marshaler and Unmarshaler and can
-// be used to delay JSON decoding or precompute a JSON encoding.
 // +kubebuilder:validation:Type=object
 // +kubebuilder:validation:Format=""
 // +kubebuilder:pruning:PreserveUnknownFields
+
+// RawMessage is a raw encoded JSON value.
+// It implements Marshaler and Unmarshaler and can
+// be used to delay JSON decoding or precompute a JSON encoding.
 type RawMessage []byte
 
 // +kubebuilder:object:generate=false
+
 // Configurable --
 type Configurable interface {
 	Configurations() []ConfigurationSpec
 }
 
-// +kubebuilder:object:generate=false
-// PlatformInjectable --
-type PlatformInjectable interface {
-	SetIntegrationPlatform(platform *IntegrationPlatform)
-}
-
 // MavenSpec --
 type MavenSpec struct {
-	LocalRepository string      `json:"localRepository,omitempty"`
-	Settings        ValueSource `json:"settings,omitempty"`
+	// The path of the local Maven repository.
+	LocalRepository string `json:"localRepository,omitempty"`
+	// The Maven properties.
+	Properties map[string]string `json:"properties,omitempty"`
+	// A reference to the ConfigMap or Secret key that contains
+	// the Maven settings.
+	Settings ValueSource `json:"settings,omitempty"`
 	// The Secret name and key, containing the CA certificate(s) used to connect
 	// to remote Maven repositories.
 	// It can contain X.509 certificates, and PKCS#7 formatted certificate chains.
@@ -92,7 +120,20 @@ type MavenSpec struct {
 	// and configured to be used as a trusted certificate(s) by the Maven commands.
 	// Note that the root CA certificates are also imported into the created keystore.
 	CASecret *corev1.SecretKeySelector `json:"caSecret,omitempty"`
-	Timeout  *metav1.Duration          `json:"timeout,omitempty"`
+	// Deprecated: use IntegrationPlatform.Spec.Build.Timeout instead
+	Timeout      *metav1.Duration `json:"timeout,omitempty"`
+	Repositories []Repository     `json:"repositories,omitempty"`
+	// Maven build extensions https://maven.apache.org/guides/mini/guide-using-extensions.html
+	Extension []MavenArtifact `json:"extension,omitempty"`
+}
+
+// RegistrySpec provides the configuration for the container registry
+type RegistrySpec struct {
+	Insecure     bool   `json:"insecure,omitempty"`
+	Address      string `json:"address,omitempty"`
+	Secret       string `json:"secret,omitempty"`
+	CA           string `json:"ca,omitempty"`
+	Organization string `json:"organization,omitempty"`
 }
 
 // ValueSource --
@@ -105,9 +146,9 @@ type ValueSource struct {
 
 // MavenArtifact --
 type MavenArtifact struct {
-	GroupID    string `json:"groupId" yaml:"groupId"`
-	ArtifactID string `json:"artifactId" yaml:"artifactId"`
-	Version    string `json:"version,omitempty" yaml:"version,omitempty"`
+	GroupID    string `json:"groupId" yaml:"groupId" xml:"groupId"`
+	ArtifactID string `json:"artifactId" yaml:"artifactId" xml:"artifactId"`
+	Version    string `json:"version,omitempty" yaml:"version,omitempty" xml:"version,omitempty"`
 }
 
 // RuntimeSpec --
@@ -138,7 +179,7 @@ const (
 	CapabilityCron = "cron"
 	// CapabilityPlatformHTTP --
 	CapabilityPlatformHTTP = "platform-http"
-	// CapabilityCircuitBreaker
+	// CapabilityCircuitBreaker --
 	CapabilityCircuitBreaker = "circuit-breaker"
 	// CapabilityTracing --
 	CapabilityTracing = "tracing"
@@ -147,6 +188,7 @@ const (
 )
 
 // +kubebuilder:object:generate=false
+
 // ResourceCondition is a common type for all conditions
 type ResourceCondition interface {
 	GetType() string
@@ -159,6 +201,11 @@ type ResourceCondition interface {
 
 // Flow is an unstructured object representing a Camel Flow in YAML/JSON DSL
 type Flow struct {
+	RawMessage `json:",inline"`
+}
+
+// Template is an unstructured object representing a Kamelet template in YAML/JSON DSL
+type Template struct {
 	RawMessage `json:",inline"`
 }
 
@@ -181,9 +228,11 @@ type ResourceSpec struct {
 }
 
 const (
-	// ResourceTypeData --
+	// ResourceTypeData represents a generic data resource
 	ResourceTypeData ResourceType = "data"
-	// ResourceTypeOpenAPI --
+	// ResourceTypeConfig represents a config resource known to runtime
+	ResourceTypeConfig ResourceType = "config"
+	// ResourceTypeOpenAPI represents an OpenAPI config resource
 	ResourceTypeOpenAPI ResourceType = "openapi"
 )
 
@@ -214,6 +263,7 @@ const (
 // DataSpec --
 type DataSpec struct {
 	Name        string `json:"name,omitempty"`
+	Path        string `json:"path,omitempty"`
 	Content     string `json:"content,omitempty"`
 	RawContent  []byte `json:"rawContent,omitempty"`
 	ContentRef  string `json:"contentRef,omitempty"`

@@ -49,7 +49,7 @@ func newPdbTrait() Trait {
 }
 
 func (t *pdbTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled == nil || !*t.Enabled {
+	if IsNilOrFalse(t.Enabled) {
 		return false, nil
 	}
 
@@ -66,10 +66,7 @@ func (t *pdbTrait) Configure(e *Environment) (bool, error) {
 		return false, fmt.Errorf("both minAvailable and maxUnavailable can't be set simultaneously")
 	}
 
-	return e.IntegrationInPhase(
-		v1.IntegrationPhaseDeploying,
-		v1.IntegrationPhaseRunning,
-	), nil
+	return e.IntegrationInRunningPhases(), nil
 }
 
 func (t *pdbTrait) Apply(e *Environment) error {
@@ -86,7 +83,7 @@ func (t *pdbTrait) Apply(e *Environment) error {
 func (t *pdbTrait) podDisruptionBudgetFor(integration *v1.Integration) *v1beta1.PodDisruptionBudget {
 	pdb := &v1beta1.PodDisruptionBudget{
 		TypeMeta: metav1.TypeMeta{
-			Kind: "PodDisruptionBudget",
+			Kind:       "PodDisruptionBudget",
 			APIVersion: v1beta1.SchemeGroupVersion.String(),
 		},
 		ObjectMeta: metav1.ObjectMeta{

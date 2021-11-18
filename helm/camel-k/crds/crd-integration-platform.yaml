@@ -71,8 +71,10 @@ spec:
                   baseImage:
                     type: string
                   buildStrategy:
-                    description: IntegrationPlatformBuildStrategy enumerates all implemented
-                      build strategies
+                    description: BuildStrategy specifies how the Build should be executed
+                    enum:
+                    - routine
+                    - pod
                     type: string
                   httpProxySecret:
                     type: string
@@ -105,10 +107,72 @@ spec:
                         required:
                         - key
                         type: object
+                      extension:
+                        description: Maven build extensions https://maven.apache.org/guides/mini/guide-using-extensions.html
+                        items:
+                          description: MavenArtifact --
+                          properties:
+                            artifactId:
+                              type: string
+                            groupId:
+                              type: string
+                            version:
+                              type: string
+                          required:
+                          - artifactId
+                          - groupId
+                          type: object
+                        type: array
                       localRepository:
+                        description: The path of the local Maven repository.
                         type: string
+                      properties:
+                        additionalProperties:
+                          type: string
+                        description: The Maven properties.
+                        type: object
+                      repositories:
+                        items:
+                          description: Repository --
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            releases:
+                              description: RepositoryPolicy --
+                              properties:
+                                checksumPolicy:
+                                  type: string
+                                enabled:
+                                  type: boolean
+                                updatePolicy:
+                                  type: string
+                              required:
+                              - enabled
+                              type: object
+                            snapshots:
+                              description: RepositoryPolicy --
+                              properties:
+                                checksumPolicy:
+                                  type: string
+                                enabled:
+                                  type: boolean
+                                updatePolicy:
+                                  type: string
+                              required:
+                              - enabled
+                              type: object
+                            url:
+                              type: string
+                          required:
+                          - id
+                          - url
+                          type: object
+                        type: array
                       settings:
-                        description: ValueSource --
+                        description: A reference to the ConfigMap or Secret key that
+                          contains the Maven settings.
                         properties:
                           configMapKeyRef:
                             description: Selects a key of a ConfigMap.
@@ -149,20 +213,19 @@ spec:
                             type: object
                         type: object
                       timeout:
+                        description: 'Deprecated: use IntegrationPlatform.Spec.Build.Timeout
+                          instead'
                         type: string
                     type: object
                   persistentVolumeClaim:
                     type: string
-                  properties:
-                    additionalProperties:
-                      type: string
-                    type: object
                   publishStrategy:
                     description: IntegrationPlatformBuildPublishStrategy enumerates
                       all implemented publish strategies
                     type: string
                   registry:
-                    description: IntegrationPlatformRegistrySpec --
+                    description: RegistrySpec provides the configuration for the container
+                      registry
                     properties:
                       address:
                         type: string
@@ -191,6 +254,12 @@ spec:
                 items:
                   description: ConfigurationSpec --
                   properties:
+                    resourceKey:
+                      type: string
+                    resourceMountPoint:
+                      type: string
+                    resourceType:
+                      type: string
                     type:
                       type: string
                     value:
@@ -243,8 +312,10 @@ spec:
                   baseImage:
                     type: string
                   buildStrategy:
-                    description: IntegrationPlatformBuildStrategy enumerates all implemented
-                      build strategies
+                    description: BuildStrategy specifies how the Build should be executed
+                    enum:
+                    - routine
+                    - pod
                     type: string
                   httpProxySecret:
                     type: string
@@ -277,10 +348,72 @@ spec:
                         required:
                         - key
                         type: object
+                      extension:
+                        description: Maven build extensions https://maven.apache.org/guides/mini/guide-using-extensions.html
+                        items:
+                          description: MavenArtifact --
+                          properties:
+                            artifactId:
+                              type: string
+                            groupId:
+                              type: string
+                            version:
+                              type: string
+                          required:
+                          - artifactId
+                          - groupId
+                          type: object
+                        type: array
                       localRepository:
+                        description: The path of the local Maven repository.
                         type: string
+                      properties:
+                        additionalProperties:
+                          type: string
+                        description: The Maven properties.
+                        type: object
+                      repositories:
+                        items:
+                          description: Repository --
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            releases:
+                              description: RepositoryPolicy --
+                              properties:
+                                checksumPolicy:
+                                  type: string
+                                enabled:
+                                  type: boolean
+                                updatePolicy:
+                                  type: string
+                              required:
+                              - enabled
+                              type: object
+                            snapshots:
+                              description: RepositoryPolicy --
+                              properties:
+                                checksumPolicy:
+                                  type: string
+                                enabled:
+                                  type: boolean
+                                updatePolicy:
+                                  type: string
+                              required:
+                              - enabled
+                              type: object
+                            url:
+                              type: string
+                          required:
+                          - id
+                          - url
+                          type: object
+                        type: array
                       settings:
-                        description: ValueSource --
+                        description: A reference to the ConfigMap or Secret key that
+                          contains the Maven settings.
                         properties:
                           configMapKeyRef:
                             description: Selects a key of a ConfigMap.
@@ -321,20 +454,19 @@ spec:
                             type: object
                         type: object
                       timeout:
+                        description: 'Deprecated: use IntegrationPlatform.Spec.Build.Timeout
+                          instead'
                         type: string
                     type: object
                   persistentVolumeClaim:
                     type: string
-                  properties:
-                    additionalProperties:
-                      type: string
-                    type: object
                   publishStrategy:
                     description: IntegrationPlatformBuildPublishStrategy enumerates
                       all implemented publish strategies
                     type: string
                   registry:
-                    description: IntegrationPlatformRegistrySpec --
+                    description: RegistrySpec provides the configuration for the container
+                      registry
                     properties:
                       address:
                         type: string
@@ -374,7 +506,7 @@ spec:
                       format: date-time
                       type: string
                     message:
-                      description: A human readable message indicating details about
+                      description: A human-readable message indicating details about
                         the transition.
                       type: string
                     reason:
@@ -395,6 +527,12 @@ spec:
                 items:
                   description: ConfigurationSpec --
                   properties:
+                    resourceKey:
+                      type: string
+                    resourceMountPoint:
+                      type: string
+                    resourceType:
+                      type: string
                     type:
                       type: string
                     value:
@@ -404,6 +542,10 @@ spec:
                   - value
                   type: object
                 type: array
+              info:
+                additionalProperties:
+                  type: string
+                type: object
               kamelet:
                 description: IntegrationPlatformKameletSpec --
                 properties:

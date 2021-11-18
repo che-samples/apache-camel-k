@@ -28,11 +28,11 @@ import (
 
 // CustomArgs --
 type CustomArgs struct {
-	DocDir    string
-	DeployDir string
-	TraitPath string
-	NavPath   string
-	ListPath  string
+	DocDir      string
+	ResourceDir string
+	TraitPath   string
+	NavPath     string
+	ListPath    string
 }
 
 // NameSystems returns the name system used by the generators in this package.

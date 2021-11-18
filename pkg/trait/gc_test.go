@@ -18,7 +18,6 @@ limitations under the License.
 package trait
 
 import (
-	"context"
 	"testing"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
@@ -37,7 +36,7 @@ func TestConfigureGarbageCollectorTraitDoesSucceed(t *testing.T) {
 
 func TestConfigureDisabledGarbageCollectorTraitDoesNotSucceed(t *testing.T) {
 	gcTrait, environment := createNominalGarbageCollectorTest()
-	gcTrait.Enabled = new(bool)
+	gcTrait.Enabled = BoolP(false)
 
 	configured, err := gcTrait.Configure(environment)
 
@@ -67,12 +66,11 @@ func TestApplyGarbageCollectorTraitDuringInitializationPhaseSkipPostActions(t *t
 }
 
 func createNominalGarbageCollectorTest() (*garbageCollectorTrait, *Environment) {
-	trait := newGarbageCollectorTrait().(*garbageCollectorTrait)
-	enabled := true
-	trait.Enabled = &enabled
+	trait, _ := newGarbageCollectorTrait().(*garbageCollectorTrait)
+	trait.Enabled = BoolP(true)
 
 	environment := &Environment{
-		Catalog: NewCatalog(context.TODO(), nil),
+		Catalog: NewCatalog(nil),
 		Integration: &v1.Integration{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "integration-name",

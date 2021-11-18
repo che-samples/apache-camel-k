@@ -35,6 +35,7 @@ import (
 	"github.com/apache/camel-k/pkg/metadata"
 	"github.com/apache/camel-k/pkg/util"
 	"github.com/apache/camel-k/pkg/util/camel"
+	"github.com/apache/camel-k/pkg/util/property"
 )
 
 var exactVersionRegexp = regexp.MustCompile(`^(\d+)\.(\d+)\.([\w-.]+)$`)
@@ -45,8 +46,8 @@ func getIntegrationKit(ctx context.Context, c client.Client, integration *v1.Int
 		return nil, nil
 	}
 	kit := v1.NewIntegrationKit(integration.Status.IntegrationKit.Namespace, integration.Status.IntegrationKit.Name)
-	err := c.Get(ctx, ctrl.ObjectKeyFromObject(&kit), &kit)
-	return &kit, err
+	err := c.Get(ctx, ctrl.ObjectKeyFromObject(kit), kit)
+	return kit, err
 }
 
 func collectConfigurationValues(configurationType string, configurable ...v1.Configurable) []string {
@@ -76,6 +77,36 @@ func collectConfigurationValues(configurationType string, configurable ...v1.Con
 	return s
 }
 
+func collectConfigurations(configurationType string, configurable ...v1.Configurable) []map[string]string {
+	var result []map[string]string
+
+	for _, c := range configurable {
+		c := c
+
+		if c == nil || reflect.ValueOf(c).IsNil() {
+			continue
+		}
+
+		entries := c.Configurations()
+		if entries == nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if entry.Type == configurationType {
+				item := make(map[string]string)
+				item["value"] = entry.Value
+				item["resourceType"] = entry.ResourceType
+				item["resourceMountPoint"] = entry.ResourceMountPoint
+				item["resourceKey"] = entry.ResourceKey
+				result = append(result, item)
+			}
+		}
+	}
+
+	return result
+}
+
 func collectConfigurationPairs(configurationType string, configurable ...v1.Configurable) []variable {
 	result := make([]variable, 0)
 
@@ -93,14 +124,7 @@ func collectConfigurationPairs(configurationType string, configurable ...v1.Conf
 
 		for _, entry := range entries {
 			if entry.Type == configurationType {
-				pair := strings.SplitN(entry.Value, "=", 2)
-				var k, v string
-				if len(pair) >= 1 {
-					k = strings.TrimSpace(pair[0])
-				}
-				if len(pair) == 2 {
-					v = strings.TrimSpace(pair[1])
-				}
+				k, v := property.SplitPropertyFileEntry(entry.Value)
 				if k == "" {
 					continue
 				}
@@ -195,4 +219,33 @@ func AddSourceDependencies(source v1.SourceSpec, catalog *camel.RuntimeCatalog) 
 	}
 
 	return dependencies
+}
+
+// Bool pointer operations:
+
+// BoolP returns a pointer to a bool value
+func BoolP(b bool) *bool {
+	return &b
+}
+
+// IsTrue checks if the bool pointer is defined and true
+func IsTrue(b *bool) bool {
+	return b != nil && *b
+}
+
+// IsNilOrTrue checks if the bool pointer is nil or true.
+// You can use it if the bool pointer is meant to be true by default.
+func IsNilOrTrue(b *bool) bool {
+	return b == nil || *b
+}
+
+// IsFalse checks if the bool pointer is defined and false
+func IsFalse(b *bool) bool {
+	return b != nil && !*b
+}
+
+// IsNilOrFalse checks if the bool pointer is nil or false.
+// You can use it if the bool pointer is meant to be false by default.
+func IsNilOrFalse(b *bool) bool {
+	return b == nil || !*b
 }

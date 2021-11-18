@@ -19,6 +19,7 @@ package defaults
 
 import (
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,5 +35,26 @@ func TestOverriddenBaseImage(t *testing.T) {
 	overriddenImage := "xxx"
 	assert.NoError(t, os.Setenv(env, overriddenImage))
 	assert.Equal(t, overriddenImage, BaseImage())
+	assert.NoError(t, os.Setenv(env, oldEnvVal))
+}
+
+func TestOverriddenInstallDefaultKamelets(t *testing.T) {
+	env := "KAMEL_INSTALL_DEFAULT_KAMELETS"
+	oldEnvVal := os.Getenv(env)
+	assert.NoError(t, os.Setenv(env, strconv.FormatBool(false)))
+	assert.False(t, InstallDefaultKamelets())
+	assert.NoError(t, os.Setenv(env, strconv.FormatBool(true)))
+	assert.True(t, InstallDefaultKamelets())
+	assert.NoError(t, os.Setenv(env, "wrongval"))
+	assert.False(t, InstallDefaultKamelets())
+	assert.NoError(t, os.Setenv(env, oldEnvVal))
+}
+
+func TestOverriddenOperatorID(t *testing.T) {
+	env := "KAMEL_OPERATOR_ID"
+	oldEnvVal := os.Getenv(env)
+	overriddenID := "operator-1"
+	assert.NoError(t, os.Setenv(env, overriddenID))
+	assert.Equal(t, overriddenID, OperatorID())
 	assert.NoError(t, os.Setenv(env, oldEnvVal))
 }

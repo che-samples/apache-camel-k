@@ -55,7 +55,7 @@ func (action *platformSetupAction) Handle(ctx context.Context, integration *v1.I
 		return nil, err
 	}
 
-	pl, err := platform.GetCurrent(ctx, action.client, integration.Namespace)
+	pl, err := platform.GetForResource(ctx, action.client, integration)
 	if err != nil && !k8serrors.IsNotFound(err) {
 		return nil, err
 	} else if pl != nil {
@@ -77,6 +77,10 @@ func determineBestProfile(ctx context.Context, c client.Client, integration *v1.
 	if p.Status.Profile != "" {
 		// Use platform profile if set
 		return p.Status.Profile
+	}
+	if p.Spec.Profile != "" {
+		// Use platform spec profile if set
+		return p.Spec.Profile
 	}
 	if knative.IsEnabledInNamespace(ctx, c, integration.Namespace) {
 		return v1.TraitProfileKnative

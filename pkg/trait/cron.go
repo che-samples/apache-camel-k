@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
-	"k8s.io/api/batch/v1beta1"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -32,6 +32,7 @@ import (
 	"github.com/apache/camel-k/pkg/metadata"
 	"github.com/apache/camel-k/pkg/util"
 	"github.com/apache/camel-k/pkg/util/kubernetes"
+	"github.com/apache/camel-k/pkg/util/label"
 	"github.com/apache/camel-k/pkg/util/uri"
 )
 
@@ -76,6 +77,16 @@ type cronTrait struct {
 	// It's required that all periodic consumers have the same period and it can be expressed as cron schedule (e.g. `1m` can be expressed as `0/1 * * * *`,
 	// while `35m` or `50s` cannot).
 	Auto *bool `property:"auto" json:"auto,omitempty"`
+	// Optional deadline in seconds for starting the job if it misses scheduled
+	// time for any reason.  Missed jobs executions will be counted as failed ones.
+	StartingDeadlineSeconds *int64 `property:"starting-deadline-seconds" json:"startingDeadlineSeconds,omitempty"`
+	// Specifies the duration in seconds, relative to the start time, that the job
+	// may be continuously active before it is considered to be failed.
+	// It defaults to 60s.
+	ActiveDeadlineSeconds *int64 `property:"active-deadline-seconds" json:"activeDeadlineSeconds,omitempty"`
+	// Specifies the number of retries before marking the job failed.
+	// It defaults to 2.
+	BackoffLimit *int32 `property:"backoff-limit" json:"backoffLimit,omitempty"`
 }
 
 var _ ControllerStrategySelector = &cronTrait{}
@@ -111,7 +122,7 @@ func newCronTrait() Trait {
 }
 
 func (t *cronTrait) Configure(e *Environment) (bool, error) {
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		e.Integration.Status.SetCondition(
 			v1.IntegrationConditionCronJobAvailable,
 			corev1.ConditionFalse,
@@ -122,7 +133,7 @@ func (t *cronTrait) Configure(e *Environment) (bool, error) {
 		return false, nil
 	}
 
-	if !e.IntegrationInPhase(v1.IntegrationPhaseInitialization, v1.IntegrationPhaseDeploying) {
+	if !e.IntegrationInPhase(v1.IntegrationPhaseInitialization) && !e.IntegrationInRunningPhases() {
 		return false, nil
 	}
 
@@ -137,7 +148,7 @@ func (t *cronTrait) Configure(e *Environment) (bool, error) {
 		return false, nil
 	}
 
-	if t.Auto == nil || *t.Auto {
+	if IsNilOrTrue(t.Auto) {
 		globalCron, err := t.getGlobalCron(e)
 		if err != nil {
 			e.Integration.Status.SetErrorCondition(
@@ -161,7 +172,7 @@ func (t *cronTrait) Configure(e *Environment) (bool, error) {
 		}
 
 		if t.ConcurrencyPolicy == "" {
-			t.ConcurrencyPolicy = string(v1beta1.ForbidConcurrent)
+			t.ConcurrencyPolicy = string(batchv1beta1.ForbidConcurrent)
 		}
 
 		if (t.Schedule == "" && t.Components == "") && t.Fallback == nil {
@@ -172,8 +183,7 @@ func (t *cronTrait) Configure(e *Environment) (bool, error) {
 			}
 			for _, fromURI := range fromURIs {
 				if uri.GetComponent(fromURI) == genericCronComponent {
-					_true := true
-					t.Fallback = &_true
+					t.Fallback = BoolP(true)
 					break
 				}
 			}
@@ -181,7 +191,7 @@ func (t *cronTrait) Configure(e *Environment) (bool, error) {
 	}
 
 	// Fallback strategy can be implemented in any other controller
-	if t.Fallback != nil && *t.Fallback {
+	if IsTrue(t.Fallback) {
 		if e.IntegrationInPhase(v1.IntegrationPhaseDeploying) {
 			e.Integration.Status.SetCondition(
 				v1.IntegrationConditionCronJobAvailable,
@@ -222,7 +232,7 @@ func (t *cronTrait) Apply(e *Environment) error {
 	if e.IntegrationInPhase(v1.IntegrationPhaseInitialization) {
 		util.StringSliceUniqueAdd(&e.Integration.Status.Capabilities, v1.CapabilityCron)
 
-		if t.Fallback != nil && *t.Fallback {
+		if IsTrue(t.Fallback) {
 			fallbackArtifact := e.CamelCatalog.GetArtifactByScheme(genericCronComponentFallbackScheme)
 			if fallbackArtifact == nil {
 				return fmt.Errorf("no fallback artifact for scheme %q has been found in camel catalog", genericCronComponentFallbackScheme)
@@ -232,19 +242,16 @@ func (t *cronTrait) Apply(e *Environment) error {
 		}
 	}
 
-	if (t.Fallback == nil || !*t.Fallback) && e.IntegrationInPhase(v1.IntegrationPhaseDeploying) {
+	if IsNilOrFalse(t.Fallback) && e.IntegrationInRunningPhases() {
 		if e.ApplicationProperties == nil {
 			e.ApplicationProperties = make(map[string]string)
 		}
 
-		e.ApplicationProperties["camel.main.duration-max-messages"] = "1"
+		e.ApplicationProperties["camel.main.duration-max-idle-seconds"] = "5"
 		e.ApplicationProperties["loader.interceptor.cron.overridable-components"] = t.Components
 		e.Interceptors = append(e.Interceptors, "cron")
 
 		cronJob := t.getCronJobFor(e)
-		maps := e.computeConfigMaps()
-
-		e.Resources.AddAll(maps)
 		e.Resources.Add(cronJob)
 
 		e.Integration.Status.SetCondition(
@@ -257,39 +264,48 @@ func (t *cronTrait) Apply(e *Environment) error {
 	return nil
 }
 
-func (t *cronTrait) getCronJobFor(e *Environment) *v1beta1.CronJob {
-	labels := map[string]string{
-		v1.IntegrationLabel: e.Integration.Name,
-	}
-
+func (t *cronTrait) getCronJobFor(e *Environment) *batchv1beta1.CronJob {
 	annotations := make(map[string]string)
-
-	// Copy annotations from the integration resource
 	if e.Integration.Annotations != nil {
 		for k, v := range filterTransferableAnnotations(e.Integration.Annotations) {
 			annotations[k] = v
 		}
 	}
 
-	cronjob := v1beta1.CronJob{
+	activeDeadline := int64(60)
+	if t.ActiveDeadlineSeconds != nil {
+		activeDeadline = *t.ActiveDeadlineSeconds
+	}
+
+	backoffLimit := int32(2)
+	if t.BackoffLimit != nil {
+		backoffLimit = *t.BackoffLimit
+	}
+
+	cronjob := batchv1beta1.CronJob{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "CronJob",
-			APIVersion: v1beta1.SchemeGroupVersion.String(),
+			APIVersion: batchv1beta1.SchemeGroupVersion.String(),
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        e.Integration.Name,
-			Namespace:   e.Integration.Namespace,
-			Labels:      labels,
+			Name:      e.Integration.Name,
+			Namespace: e.Integration.Namespace,
+			Labels: map[string]string{
+				v1.IntegrationLabel: e.Integration.Name,
+			},
 			Annotations: e.Integration.Annotations,
 		},
-		Spec: v1beta1.CronJobSpec{
-			Schedule:          t.Schedule,
-			ConcurrencyPolicy: v1beta1.ConcurrencyPolicy(t.ConcurrencyPolicy),
-			JobTemplate: v1beta1.JobTemplateSpec{
+		Spec: batchv1beta1.CronJobSpec{
+			Schedule:                t.Schedule,
+			ConcurrencyPolicy:       batchv1beta1.ConcurrencyPolicy(t.ConcurrencyPolicy),
+			StartingDeadlineSeconds: t.StartingDeadlineSeconds,
+			JobTemplate: batchv1beta1.JobTemplateSpec{
 				Spec: batchv1.JobSpec{
+					ActiveDeadlineSeconds: &activeDeadline,
+					BackoffLimit:          &backoffLimit,
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
-							Labels:      labels,
+							Labels:      label.AddLabels(e.Integration.Name),
 							Annotations: annotations,
 						},
 						Spec: corev1.PodSpec{
@@ -308,16 +324,16 @@ func (t *cronTrait) getCronJobFor(e *Environment) *v1beta1.CronJob {
 // SelectControllerStrategy can be used to check if a CronJob can be generated given the integration and trait settings
 func (t *cronTrait) SelectControllerStrategy(e *Environment) (*ControllerStrategy, error) {
 	cronStrategy := ControllerStrategyCronJob
-	if t.Enabled != nil && !*t.Enabled {
+	if IsFalse(t.Enabled) {
 		return nil, nil
 	}
-	if t.Fallback != nil && *t.Fallback {
+	if IsTrue(t.Fallback) {
 		return nil, nil
 	}
 	if t.Schedule != "" {
 		return &cronStrategy, nil
 	}
-	if t.Auto == nil || *t.Auto {
+	if IsNilOrTrue(t.Auto) {
 		globalCron, err := t.getGlobalCron(e)
 		if err == nil && globalCron != nil {
 			return &cronStrategy, nil
@@ -379,7 +395,7 @@ func (t *cronTrait) getGlobalCron(e *Environment) (*cronInfo, error) {
 func (t *cronTrait) getSourcesFromURIs(e *Environment) ([]string, error) {
 	var sources []v1.SourceSpec
 	var err error
-	if sources, err = kubernetes.ResolveIntegrationSources(t.Ctx, t.Client, e.Integration, e.Resources); err != nil {
+	if sources, err = kubernetes.ResolveIntegrationSources(e.Ctx, t.Client, e.Integration, e.Resources); err != nil {
 		return nil, err
 	}
 	meta := metadata.ExtractAll(e.CamelCatalog, sources)
@@ -413,7 +429,7 @@ func getCronForURI(camelURI string) *cronInfo {
 // Specific extractors
 
 // timerToCronInfo converts a timer endpoint to a Kubernetes cron schedule
-// nolint: gocritic
+
 func timerToCronInfo(camelURI string) *cronInfo {
 	if uri.GetQueryParameter(camelURI, "delay") != "" ||
 		uri.GetQueryParameter(camelURI, "repeatCount") != "" ||

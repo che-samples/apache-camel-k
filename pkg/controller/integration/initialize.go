@@ -55,36 +55,40 @@ func (action *initializeAction) Handle(ctx context.Context, integration *v1.Inte
 		return nil, err
 	}
 
-	if integration.Spec.IntegrationKit == nil && integration.Spec.Kit != "" {
-		// TODO: temporary fallback until deprecated field gets removed
-		integration.Spec.IntegrationKit = &corev1.ObjectReference{
-			Name: integration.Spec.Kit,
-		}
-	}
-
-	if integration.Spec.IntegrationKit != nil && integration.Spec.IntegrationKit.Name != "" {
-		kitNamespace := integration.Spec.IntegrationKit.Namespace
-		kitName := integration.Spec.IntegrationKit.Name
-
-		if kitNamespace == "" {
-			pl, err := platform.GetCurrent(ctx, action.client, integration.Namespace)
-			if err != nil && !k8serrors.IsNotFound(err) {
-				return nil, err
-			}
-			if pl != nil {
-				kitNamespace = pl.Namespace
+	if integration.Status.IntegrationKit == nil {
+		// nolint: staticcheck
+		if integration.Spec.IntegrationKit == nil && integration.Spec.Kit != "" {
+			// TODO: temporary fallback until deprecated field gets removed
+			integration.Spec.IntegrationKit = &corev1.ObjectReference{
+				Name: integration.Spec.Kit,
 			}
 		}
-		kit := v1.NewIntegrationKit(kitNamespace, kitName)
-		integration.SetIntegrationKit(&kit)
-	} else {
-		integration.Status.IntegrationKit = nil
+
+		if integration.Spec.IntegrationKit != nil && integration.Spec.IntegrationKit.Name != "" {
+			kitNamespace := integration.Spec.IntegrationKit.Namespace
+			kitName := integration.Spec.IntegrationKit.Name
+
+			if kitNamespace == "" {
+				pl, err := platform.GetForResource(ctx, action.client, integration)
+				if err != nil && !k8serrors.IsNotFound(err) {
+					return nil, err
+				}
+				if pl != nil {
+					kitNamespace = pl.Namespace
+				}
+			}
+			kit := v1.NewIntegrationKit(kitNamespace, kitName)
+			integration.SetIntegrationKit(kit)
+		} else {
+			integration.Status.IntegrationKit = nil
+		}
 	}
 
 	integration.Status.Phase = v1.IntegrationPhaseBuildingKit
 	integration.Status.Version = defaults.Version
 	if timestamp := integration.Status.InitializationTimestamp; timestamp == nil || timestamp.IsZero() {
-		now := metav1.Now()
+		// Round to second precision, as meta.Time fields are marshalled in RFC3339 format
+		now := metav1.Now().Rfc3339Copy()
 		integration.Status.InitializationTimestamp = &now
 	}
 

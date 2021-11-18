@@ -23,8 +23,7 @@ import (
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 )
 
-// NewInitializeRoutineAction creates a new initialize action
-func NewInitializeRoutineAction() Action {
+func newInitializeRoutineAction() Action {
 	return &initializeRoutineAction{}
 }
 
@@ -39,7 +38,7 @@ func (action *initializeRoutineAction) Name() string {
 
 // CanHandle tells whether this action can handle the build
 func (action *initializeRoutineAction) CanHandle(build *v1.Build) bool {
-	return build.Status.Phase == v1.BuildPhaseInitialization
+	return build.Status.Phase == "" || build.Status.Phase == v1.BuildPhaseInitialization
 }
 
 // Handle handles the builds

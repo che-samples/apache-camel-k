@@ -27,9 +27,9 @@ import (
 	"github.com/pkg/errors"
 )
 
-func maybeErrorHandler(errHandlConf v1alpha1.ErrorHandlerSpec, bindingContext bindings.BindingContext) (*bindings.Binding, error) {
+func maybeErrorHandler(errHandlConf *v1alpha1.ErrorHandlerSpec, bindingContext bindings.BindingContext) (*bindings.Binding, error) {
 	var errorHandlerBinding *bindings.Binding
-	if errHandlConf.RawMessage != nil {
+	if errHandlConf != nil {
 		errorHandlerSpec, err := parseErrorHandler(errHandlConf.RawMessage)
 		if err != nil {
 			return nil, errors.Wrap(err, "could not parse error handler")
@@ -99,6 +99,10 @@ func setErrorHandlerConfiguration(errorHandlerBinding *bindings.Binding, errorHa
 	properties, err := errorHandler.Configuration()
 	if err != nil {
 		return err
+	}
+	// initialize map if not yet initialized
+	if errorHandlerBinding.ApplicationProperties == nil {
+		errorHandlerBinding.ApplicationProperties = make(map[string]string)
 	}
 	for key, value := range properties {
 		errorHandlerBinding.ApplicationProperties[key] = fmt.Sprintf("%v", value)

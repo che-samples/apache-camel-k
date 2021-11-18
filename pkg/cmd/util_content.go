@@ -22,9 +22,23 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 )
+
+const (
+	Megabyte = 1 << 20
+	Kilobyte = 1 << 10
+)
+
+func fileSize(source string) (int64, error) {
+	fi, err := os.Stat(source)
+	if err != nil {
+		return -1, err
+	}
+	return fi.Size(), nil
+}
 
 func loadRawContent(source string) ([]byte, string, error) {
 	var content []byte
@@ -38,7 +52,8 @@ func loadRawContent(source string) ([]byte, string, error) {
 	if ok {
 		content, err = ioutil.ReadFile(source)
 	} else {
-		u, err := url.Parse(source)
+		var u *url.URL
+		u, err = url.Parse(source)
 		if err != nil {
 			return nil, "", err
 		}
@@ -51,7 +66,7 @@ func loadRawContent(source string) ([]byte, string, error) {
 		case "https":
 			content, err = loadContentHTTP(u)
 		default:
-			return nil, "", fmt.Errorf("unsupported scheme %s", u.Scheme)
+			return nil, "", fmt.Errorf("missing file or unsupported scheme %s", u.Scheme)
 		}
 	}
 
@@ -84,7 +99,6 @@ func loadTextContent(source string, base64Compression bool) (string, string, boo
 }
 
 func loadContentHTTP(u *url.URL) ([]byte, error) {
-	// nolint: gosec
 	resp, err := http.Get(u.String())
 	if err != nil {
 		return []byte{}, err

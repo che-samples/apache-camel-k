@@ -33,9 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/apache/camel-k/pkg/apis"
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 	"github.com/apache/camel-k/pkg/client"
 	"github.com/apache/camel-k/pkg/install"
@@ -76,6 +74,7 @@ func newCmdInstall(rootCmdOptions *RootCmdOptions) (*cobra.Command, *installCmdO
 	cmd.Flags().String("cluster-type", "", "Set explicitly the cluster type to Kubernetes or OpenShift")
 	cmd.Flags().Bool("skip-operator-setup", false, "Do not install the operator in the namespace (in case there's a global one)")
 	cmd.Flags().Bool("skip-cluster-setup", false, "Skip the cluster-setup phase")
+	cmd.Flags().Bool("skip-registry-setup", false, "Skip the registry-setup phase (may negatively impact building of integrations)")
 	cmd.Flags().Bool("example", false, "Install example integration")
 	cmd.Flags().Bool("global", false, "Configure the operator to watch all namespaces. No integration platform is created. You can run integrations in a namespace by installing an integration platform: 'kamel install --skip-operator-setup -n my-namespace'")
 	cmd.Flags().Bool("force", false, "Force replacement of configuration resources when already present.")
@@ -103,18 +102,20 @@ func newCmdInstall(rootCmdOptions *RootCmdOptions) (*cobra.Command, *installCmdO
 
 	// OLM
 	cmd.Flags().Bool("olm", true, "Try to install everything via OLM (Operator Lifecycle Manager) if available")
-	cmd.Flags().String("olm-operator-name", olm.DefaultOperatorName, "Name of the Camel K operator in the OLM source or marketplace")
-	cmd.Flags().String("olm-package", olm.DefaultPackage, "Name of the Camel K package in the OLM source or marketplace")
-	cmd.Flags().String("olm-channel", olm.DefaultChannel, "Name of the Camel K channel in the OLM source or marketplace")
-	cmd.Flags().String("olm-source", olm.DefaultSource, "Name of the OLM source providing the Camel K package (defaults to the standard Operator Hub source)")
-	cmd.Flags().String("olm-source-namespace", olm.DefaultSourceNamespace, "Namespace where the OLM source is available")
-	cmd.Flags().String("olm-starting-csv", olm.DefaultStartingCSV, "Allow to install a specific version from the operator source instead of latest available "+
+	cmd.Flags().String("olm-operator-name", "", "Name of the Camel K operator in the OLM source or marketplace")
+	cmd.Flags().String("olm-package", "", "Name of the Camel K package in the OLM source or marketplace")
+	cmd.Flags().String("olm-channel", "", "Name of the Camel K channel in the OLM source or marketplace")
+	cmd.Flags().String("olm-source", "", "Name of the OLM source providing the Camel K package (defaults to the standard Operator Hub source)")
+	cmd.Flags().String("olm-source-namespace", "", "Namespace where the OLM source is available")
+	cmd.Flags().String("olm-starting-csv", "", "Allow to install a specific version from the operator source instead of latest available "+
 		"from the channel")
-	cmd.Flags().String("olm-global-namespace", olm.DefaultGlobalNamespace, "A namespace containing an OperatorGroup that defines global scope for the "+
+	cmd.Flags().String("olm-global-namespace", "", "A namespace containing an OperatorGroup that defines global scope for the "+
 		"operator (used in combination with the --global flag)")
 
-	// Maven settings
-	cmd.Flags().String("local-repository", "", "Location of the local Maven repository")
+	// Maven
+	cmd.Flags().String("maven-local-repository", "", "Path of the local Maven repository")
+	cmd.Flags().StringArray("maven-property", nil, "Add a Maven property")
+	cmd.Flags().StringArray("maven-extension", nil, "Add a Maven build extension")
 	cmd.Flags().String("maven-settings", "", "Configure the source of the Maven settings (configmap|secret:name[/key])")
 	cmd.Flags().StringArray("maven-repository", nil, "Add a Maven repository")
 	cmd.Flags().String("maven-ca-secret", "", "Configure the secret key containing the Maven CA certificates (secret/key)")
@@ -126,10 +127,11 @@ func newCmdInstall(rootCmdOptions *RootCmdOptions) (*cobra.Command, *installCmdO
 	cmd.Flags().Bool("monitoring", false, "To enable or disable the operator monitoring")
 	cmd.Flags().Int("monitoring-port", 8080, "The port of the metrics endpoint")
 
-	// Pod settings
+	// Operator settings
 	cmd.Flags().StringArray("toleration", nil, "Add a Toleration to the operator Pod")
 	cmd.Flags().StringArray("node-selector", nil, "Add a NodeSelector to the operator Pod")
-	cmd.Flags().StringArray("operator-resources", nil, "Define the resources requests and limits assigned to the operator Pod as <requestType.requestResource=value> (ie, limits.memory=256Mi)")
+	cmd.Flags().StringArray("operator-resources", nil, "Define the resources requests and limits assigned to the operator Pod as <requestType.requestResource=value> (i.e., limits.memory=256Mi)")
+	cmd.Flags().StringArray("operator-env-vars", nil, "Add an environment variable to set in the operator Pod(s), as <name=value>")
 
 	// save
 	cmd.Flags().Bool("save", false, "Save the install parameters into the default kamel configuration file (kamel-config.yaml)")
@@ -152,6 +154,7 @@ type installCmdOptions struct {
 	ClusterSetupOnly        bool     `mapstructure:"cluster-setup"`
 	SkipOperatorSetup       bool     `mapstructure:"skip-operator-setup"`
 	SkipClusterSetup        bool     `mapstructure:"skip-cluster-setup"`
+	SkipRegistrySetup       bool     `mapstructure:"skip-registry-setup"`
 	ExampleSetup            bool     `mapstructure:"example"`
 	Global                  bool     `mapstructure:"global"`
 	KanikoBuildCache        bool     `mapstructure:"kaniko-build-cache"`
@@ -164,24 +167,26 @@ type installCmdOptions struct {
 	BaseImage               string   `mapstructure:"base-image"`
 	OperatorImage           string   `mapstructure:"operator-image"`
 	OperatorImagePullPolicy string   `mapstructure:"operator-image-pull-policy"`
-	LocalRepository         string   `mapstructure:"local-repository"`
 	BuildStrategy           string   `mapstructure:"build-strategy"`
 	BuildPublishStrategy    string   `mapstructure:"build-publish-strategy"`
 	BuildTimeout            string   `mapstructure:"build-timeout"`
+	MavenExtensions         []string `mapstructure:"maven-extensions"`
+	MavenLocalRepository    string   `mapstructure:"maven-local-repository"`
+	MavenProperties         []string `mapstructure:"maven-properties"`
 	MavenRepositories       []string `mapstructure:"maven-repositories"`
 	MavenSettings           string   `mapstructure:"maven-settings"`
 	MavenCASecret           string   `mapstructure:"maven-ca-secret"`
 	HealthPort              int32    `mapstructure:"health-port"`
 	Monitoring              bool     `mapstructure:"monitoring"`
 	MonitoringPort          int32    `mapstructure:"monitoring-port"`
-	Properties              []string `mapstructure:"properties"`
 	TraitProfile            string   `mapstructure:"trait-profile"`
 	Tolerations             []string `mapstructure:"tolerations"`
 	NodeSelectors           []string `mapstructure:"node-selectors"`
 	HTTPProxySecret         string   `mapstructure:"http-proxy-secret"`
 	ResourcesRequirements   []string `mapstructure:"operator-resources"`
+	EnvVars                 []string `mapstructure:"operator-env-vars"`
 
-	registry         v1.IntegrationPlatformRegistrySpec
+	registry         v1.RegistrySpec
 	registryAuth     registry.Auth
 	RegistryAuthFile string `mapstructure:"registry-auth-file"`
 
@@ -226,21 +231,21 @@ func (o *installCmdOptions) install(cobraCmd *cobra.Command, _ []string) error {
 			fmt.Fprintln(cobraCmd.OutOrStdout(), "OLM is available in the cluster")
 			var installed bool
 			if installed, err = olm.Install(o.Context, olmClient, o.Namespace, o.Global, o.olmOptions, collection,
-				o.Tolerations, o.NodeSelectors, o.ResourcesRequirements); err != nil {
+				o.Tolerations, o.NodeSelectors, o.ResourcesRequirements, o.EnvVars); err != nil {
 				return err
 			}
 			if !installed {
 				fmt.Fprintln(cobraCmd.OutOrStdout(), "OLM resources are already available: skipping installation")
 			}
 
-			if err = install.WaitForAllCRDInstallation(o.Context, clientProvider, 90*time.Second); err != nil {
+			if err = install.WaitForAllCrdInstallation(o.Context, clientProvider, 90*time.Second); err != nil {
 				return err
 			}
 		}
 	}
 
 	if !o.SkipClusterSetup && !installViaOLM {
-		err := install.SetupClusterWideResourcesOrCollect(o.Context, clientProvider, collection, o.ClusterType)
+		err := install.SetupClusterWideResourcesOrCollect(o.Context, clientProvider, collection, o.ClusterType, o.Force)
 		if err != nil && k8serrors.IsForbidden(err) {
 			fmt.Fprintln(cobraCmd.OutOrStdout(), "Current user is not authorized to create cluster-wide objects like custom resource definitions or cluster roles: ", err)
 
@@ -280,6 +285,7 @@ func (o *installCmdOptions) install(cobraCmd *cobra.Command, _ []string) error {
 				Tolerations:           o.Tolerations,
 				NodeSelectors:         o.NodeSelectors,
 				ResourcesRequirements: o.ResourcesRequirements,
+				EnvVars:               o.EnvVars,
 			}
 			err = install.OperatorOrCollect(o.Context, c, cfg, collection, o.Force)
 			if err != nil {
@@ -290,21 +296,26 @@ func (o *installCmdOptions) install(cobraCmd *cobra.Command, _ []string) error {
 		}
 
 		generatedSecretName := ""
-		if o.registryAuth.IsSet() {
-			regData := o.registryAuth
-			regData.Registry = o.registry.Address
-			generatedSecretName, err = install.RegistrySecretOrCollect(o.Context, c, namespace, regData, collection, o.Force)
-			if err != nil {
-				return err
+
+		if !o.SkipRegistrySetup {
+			if o.registryAuth.IsSet() {
+				regData := o.registryAuth
+				regData.Registry = o.registry.Address
+				generatedSecretName, err = install.RegistrySecretOrCollect(o.Context, c, namespace, regData, collection, o.Force)
+				if err != nil {
+					return err
+				}
+			} else if o.RegistryAuthFile != "" {
+				generatedSecretName, err = install.RegistrySecretFromFileOrCollect(o.Context, c, namespace, o.RegistryAuthFile, collection, o.Force)
+				if err != nil {
+					return err
+				}
 			}
-		} else if o.RegistryAuthFile != "" {
-			generatedSecretName, err = install.RegistrySecretFromFileOrCollect(o.Context, c, namespace, o.RegistryAuthFile, collection, o.Force)
-			if err != nil {
-				return err
-			}
+		} else if o.SkipRegistrySetup {
+			fmt.Fprintln(cobraCmd.OutOrStdout(), "Camel K operator registry setup skipped")
 		}
 
-		platform, err := install.PlatformOrCollect(o.Context, c, o.ClusterType, namespace, o.registry, collection)
+		platform, err := install.PlatformOrCollect(o.Context, c, o.ClusterType, namespace, o.SkipRegistrySetup, o.registry, collection)
 		if err != nil {
 			return err
 		}
@@ -313,19 +324,37 @@ func (o *installCmdOptions) install(cobraCmd *cobra.Command, _ []string) error {
 			platform.Spec.Build.Registry.Secret = generatedSecretName
 		}
 
-		if len(o.Properties) > 0 {
-			platform.Spec.Build.Properties = make(map[string]string)
-
-			for _, property := range o.Properties {
+		if len(o.MavenProperties) > 0 {
+			platform.Spec.Build.Maven.Properties = make(map[string]string)
+			for _, property := range o.MavenProperties {
 				kv := strings.Split(property, "=")
-
 				if len(kv) == 2 {
-					platform.Spec.Build.Properties[kv[0]] = kv[1]
+					platform.Spec.Build.Maven.Properties[kv[0]] = kv[1]
 				}
 			}
 		}
-		if o.LocalRepository != "" {
-			platform.Spec.Build.Maven.LocalRepository = o.LocalRepository
+
+		if size := len(o.MavenExtensions); size > 0 {
+			platform.Spec.Build.Maven.Extension = make([]v1.MavenArtifact, 0, size)
+			for _, extension := range o.MavenExtensions {
+				gav := strings.Split(extension, ":")
+				if len(gav) != 2 && len(gav) != 3 {
+					meg := fmt.Sprintf("Maven build extension GAV must match <groupId>:<artifactId>:<version>, found: %s", extension)
+					return errors.New(meg)
+				}
+				ext := v1.MavenArtifact{
+					GroupID:    gav[0],
+					ArtifactID: gav[1],
+				}
+				if len(gav) == 3 {
+					ext.Version = gav[2]
+				}
+				platform.Spec.Build.Maven.Extension = append(platform.Spec.Build.Maven.Extension, ext)
+			}
+		}
+
+		if o.MavenLocalRepository != "" {
+			platform.Spec.Build.Maven.LocalRepository = o.MavenLocalRepository
 		}
 		if o.RuntimeVersion != "" {
 			platform.Spec.Build.RuntimeVersion = o.RuntimeVersion
@@ -334,7 +363,7 @@ func (o *installCmdOptions) install(cobraCmd *cobra.Command, _ []string) error {
 			platform.Spec.Build.BaseImage = o.BaseImage
 		}
 		if o.BuildStrategy != "" {
-			platform.Spec.Build.BuildStrategy = v1.IntegrationPlatformBuildStrategy(o.BuildStrategy)
+			platform.Spec.Build.BuildStrategy = v1.BuildStrategy(o.BuildStrategy)
 		}
 		if o.BuildPublishStrategy != "" {
 			platform.Spec.Build.PublishStrategy = v1.IntegrationPlatformBuildPublishStrategy(o.BuildPublishStrategy)
@@ -470,20 +499,24 @@ func (o *installCmdOptions) printOutput(collection *kubernetes.Collection) error
 
 // nolint:errcheck
 func (o *installCmdOptions) waitForPlatformReady(cmd *cobra.Command, platform *v1.IntegrationPlatform) error {
+	c, err := o.GetCmdClient()
+	if err != nil {
+		return err
+	}
+
 	handler := func(i *v1.IntegrationPlatform) bool {
 		if i.Status.Phase == v1.IntegrationPlatformPhaseReady || i.Status.Phase == v1.IntegrationPlatformPhaseError {
 			return false
 		}
-
 		return true
 	}
 
-	go watch.HandleIntegrationPlatformEvents(o.Context, platform, func(event *corev1.Event) bool {
+	go watch.HandleIntegrationPlatformEvents(o.Context, c, platform, func(event *corev1.Event) bool {
 		fmt.Fprintln(cmd.OutOrStdout(), event.Message)
 		return true
 	})
 
-	return watch.HandlePlatformStateChanges(o.Context, platform, handler)
+	return watch.HandlePlatformStateChanges(o.Context, c, platform, handler)
 }
 
 func (o *installCmdOptions) decode(cmd *cobra.Command, _ []string) error {
@@ -513,12 +546,6 @@ func (o *installCmdOptions) decode(cmd *cobra.Command, _ []string) error {
 
 func (o *installCmdOptions) validate(_ *cobra.Command, _ []string) error {
 	var result error
-
-	// Let's register only our own APIs
-	schema := runtime.NewScheme()
-	if err := apis.AddToScheme(schema); err != nil {
-		return err
-	}
 
 	if len(o.MavenRepositories) > 0 && o.MavenSettings != "" {
 		err := fmt.Errorf("incompatible options combinations: you cannot set both mavenRepository and mavenSettings")
@@ -554,7 +581,7 @@ func (o *installCmdOptions) validate(_ *cobra.Command, _ []string) error {
 
 	if o.BuildStrategy != "" {
 		found := false
-		for _, s := range v1.IntegrationPlatformBuildStrategies {
+		for _, s := range v1.BuildStrategies {
 			if string(s) == o.BuildStrategy {
 				found = true
 				break
@@ -562,7 +589,7 @@ func (o *installCmdOptions) validate(_ *cobra.Command, _ []string) error {
 		}
 		if !found {
 			var strategies []string
-			for _, s := range v1.IntegrationPlatformBuildStrategies {
+			for _, s := range v1.BuildStrategies {
 				strategies = append(strategies, string(s))
 			}
 			return fmt.Errorf("unknown build strategy: %s. One of [%s] is expected", o.BuildStrategy, strings.Join(strategies, ", "))

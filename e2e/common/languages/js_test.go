@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 // To enable compilation of this file in Goland, go to "Settings -> Go -> Vendoring & Build Tags -> Custom Tags" and add "integration"
@@ -39,7 +40,7 @@ func TestRunSimpleJavaScriptExamples(t *testing.T) {
 		t.Run("run js", func(t *testing.T) {
 			Expect(Kamel("run", "-n", ns, "files/js.js").Execute()).To(Succeed())
 			Eventually(IntegrationPodPhase(ns, "js"), TestTimeoutMedium).Should(Equal(v1.PodRunning))
-			Eventually(IntegrationCondition(ns, "js", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
+			Eventually(IntegrationConditionStatus(ns, "js", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
 			Eventually(IntegrationLogs(ns, "js"), TestTimeoutShort).Should(ContainSubstring("Magicstring!"))
 			Expect(Kamel("delete", "--all", "-n", ns).Execute()).To(Succeed())
 		})

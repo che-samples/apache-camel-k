@@ -1,6 +1,7 @@
+//go:build integration
 // +build integration
 
-// To enable compilation of this file in Goland, go to "Settings -> Go -> Vendoring & Build Tags -> Custom Tags" and add "knative"
+// To enable compilation of this file in Goland, go to "Settings -> Go -> Vendoring & Build Tags -> Custom Tags" and add "integration"
 
 /*
 Licensed to the Apache Software Foundation (ASF) under one or more
@@ -38,13 +39,13 @@ func TestRunServiceCombo(t *testing.T) {
 		Expect(Kamel("install", "-n", ns, "--trait-profile", "knative").Execute()).To(Succeed())
 		Expect(Kamel("run", "-n", ns, "files/knative2.groovy").Execute()).To(Succeed())
 		Eventually(IntegrationPodPhase(ns, "knative2"), TestTimeoutLong).Should(Equal(v1.PodRunning))
-		Eventually(IntegrationCondition(ns, "knative2", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
+		Eventually(IntegrationConditionStatus(ns, "knative2", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
 		Expect(Kamel("run", "-n", ns, "files/knative3.groovy").Execute()).To(Succeed())
 		Eventually(IntegrationPodPhase(ns, "knative3"), TestTimeoutLong).Should(Equal(v1.PodRunning))
-		Eventually(IntegrationCondition(ns, "knative3", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
+		Eventually(IntegrationConditionStatus(ns, "knative3", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
 		Expect(Kamel("run", "-n", ns, "files/knative1.groovy").Execute()).To(Succeed())
 		Eventually(IntegrationPodPhase(ns, "knative1"), TestTimeoutLong).Should(Equal(v1.PodRunning))
-		Eventually(IntegrationCondition(ns, "knative1", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
+		Eventually(IntegrationConditionStatus(ns, "knative1", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
 		// Correct logs
 		Eventually(IntegrationLogs(ns, "knative1"), TestTimeoutMedium).Should(ContainSubstring("Received from 2: Hello from knative2"))
 		Eventually(IntegrationLogs(ns, "knative1"), TestTimeoutMedium).Should(ContainSubstring("Received from 3: Hello from knative3"))
@@ -56,22 +57,9 @@ func TestRunServiceCombo(t *testing.T) {
 	})
 }
 
-func TestRunChannelComboV1Alpha1(t *testing.T) {
-	WithNewTestNamespace(t, func(ns string) {
-		Expect(CreateKnativeChannelv1Alpha1(ns, "messages")()).To(Succeed())
-		Expect(Kamel("install", "-n", ns, "--trait-profile", "knative").Execute()).To(Succeed())
-		Expect(Kamel("run", "-n", ns, "files/knativech2.groovy").Execute()).To(Succeed())
-		Expect(Kamel("run", "-n", ns, "files/knativech1.groovy").Execute()).To(Succeed())
-		Eventually(IntegrationPodPhase(ns, "knativech2"), TestTimeoutLong).Should(Equal(v1.PodRunning))
-		Eventually(IntegrationPodPhase(ns, "knativech1"), TestTimeoutLong).Should(Equal(v1.PodRunning))
-		Eventually(IntegrationLogs(ns, "knativech2"), TestTimeoutMedium).Should(ContainSubstring("Received: Hello from knativech1"))
-		Expect(Kamel("delete", "--all", "-n", ns).Execute()).To(Succeed())
-	})
-}
-
 func TestRunChannelComboV1Beta1(t *testing.T) {
 	WithNewTestNamespace(t, func(ns string) {
-		Expect(CreateKnativeChannelv1Beta1(ns, "messages")()).To(Succeed())
+		Expect(CreateKnativeChannel(ns, "messages")()).To(Succeed())
 		Expect(Kamel("install", "-n", ns, "--trait-profile", "knative").Execute()).To(Succeed())
 		Expect(Kamel("run", "-n", ns, "files/knativech2.groovy").Execute()).To(Succeed())
 		Expect(Kamel("run", "-n", ns, "files/knativech1.groovy").Execute()).To(Succeed())
@@ -84,7 +72,7 @@ func TestRunChannelComboV1Beta1(t *testing.T) {
 
 func TestRunChannelComboGetToPost(t *testing.T) {
 	WithNewTestNamespace(t, func(ns string) {
-		Expect(CreateKnativeChannelv1Beta1(ns, "messages")()).To(Succeed())
+		Expect(CreateKnativeChannel(ns, "messages")()).To(Succeed())
 		Expect(Kamel("install", "-n", ns, "--trait-profile", "knative").Execute()).To(Succeed())
 		Expect(Kamel("run", "-n", ns, "files/knativegetpost2.groovy").Execute()).To(Succeed())
 		Expect(Kamel("run", "-n", ns, "files/knativegetpost1.groovy").Execute()).To(Succeed())
@@ -97,8 +85,8 @@ func TestRunChannelComboGetToPost(t *testing.T) {
 
 func TestRunMultiChannelChain(t *testing.T) {
 	WithNewTestNamespace(t, func(ns string) {
-		Expect(CreateKnativeChannelv1Beta1(ns, "messages")()).To(Succeed())
-		Expect(CreateKnativeChannelv1Beta1(ns, "words")()).To(Succeed())
+		Expect(CreateKnativeChannel(ns, "messages")()).To(Succeed())
+		Expect(CreateKnativeChannel(ns, "words")()).To(Succeed())
 		Expect(Kamel("install", "-n", ns, "--trait-profile", "knative").Execute()).To(Succeed())
 		Expect(Kamel("run", "-n", ns, "files/knativemultihop3.groovy").Execute()).To(Succeed())
 		Expect(Kamel("run", "-n", ns, "files/knativemultihop2.groovy").Execute()).To(Succeed())
@@ -135,7 +123,7 @@ func TestRunFlow(t *testing.T) {
 		Expect(Kamel("install", "-n", ns, "--trait-profile", "knative").Execute()).To(Succeed())
 		Expect(Kamel("run", "-n", ns, "files/flow.yaml").Execute()).To(Succeed())
 		Eventually(IntegrationPodPhase(ns, "flow"), TestTimeoutLong).Should(Equal(v1.PodRunning))
-		Eventually(IntegrationCondition(ns, "flow", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
+		Eventually(IntegrationConditionStatus(ns, "flow", camelv1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(v1.ConditionTrue))
 		Expect(Kamel("delete", "--all", "-n", ns).Execute()).To(Succeed())
 	})
 }

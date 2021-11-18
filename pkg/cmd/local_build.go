@@ -46,7 +46,7 @@ func newCmdLocalBuild(rootCmdOptions *RootCmdOptions) (*cobra.Command, *localBui
 			if err := options.run(cmd, args); err != nil {
 				fmt.Println(err.Error())
 			}
-			if err := options.deinit(args); err != nil {
+			if err := options.deinit(); err != nil {
 				return err
 			}
 
@@ -167,15 +167,14 @@ func (command *localBuildCmdOptions) run(cmd *cobra.Command, args []string) erro
 	var dependenciesList, propertyFilesList []string
 	routeFiles := args
 	if !command.BaseImage {
-		// Fetch dependencies.
-		dependencies, err := getDependencies(args, command.AdditionalDependencies, command.MavenRepositories, true)
+		dependencies, err := getDependencies(command.Context, args, command.AdditionalDependencies, command.MavenRepositories, true)
 		if err != nil {
 			return err
 		}
 
 		var propertyFiles []string
 		if !command.DependenciesOnly {
-			// Manage integration properties which may come from files or CLI.
+			// Manage integration properties which may come from files or CLI
 			propertyFiles, err = updateIntegrationProperties(command.Properties, command.PropertyFiles, false)
 			if err != nil {
 				return err
@@ -222,9 +221,9 @@ func (command *localBuildCmdOptions) run(cmd *cobra.Command, args []string) erro
 
 	// Integration directory can only be used when building an integration image or when we just
 	// build the integration without also building the image. A local build of the integration is
-	// represented by all the files that define	 the integration: dependencies, properties and routes.
+	// represented by all the files that define the integration: dependencies, properties and routes.
 
-	// The only case where we should not execute the image integration creation is when we want to
+	// The only case in which we should not execute the integration image creation is when we want to
 	// just output the files that comprise the integration locally.
 	if command.IntegrationDirectory != "" && command.Image == "" {
 		return nil
@@ -232,7 +231,7 @@ func (command *localBuildCmdOptions) run(cmd *cobra.Command, args []string) erro
 
 	// Create and build integration image.
 	err := createAndBuildIntegrationImage(command.Context, command.ContainerRegistry, command.BaseImage,
-		command.Image, propertyFilesList, dependenciesList, routeFiles, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		command.Image, propertyFilesList, dependenciesList, routeFiles, false, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}
@@ -240,14 +239,23 @@ func (command *localBuildCmdOptions) run(cmd *cobra.Command, args []string) erro
 	return nil
 }
 
-func (command *localBuildCmdOptions) deinit(args []string) error {
+func (command *localBuildCmdOptions) deinit() error {
 	// If base image construction is enabled delete the directory for it.
-	deleteDockerBaseWorkingDirectory()
+	err := deleteDockerBaseWorkingDirectory()
+	if err != nil {
+		return err
+	}
 
 	// If integration files are provided delete the maven project folder.
 	if !command.BaseImage {
-		deleteDockerWorkingDirectory()
-		deleteMavenWorkingDirectory()
+		err = deleteDockerWorkingDirectory()
+		if err != nil {
+			return err
+		}
+		err = deleteMavenWorkingDirectory()
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

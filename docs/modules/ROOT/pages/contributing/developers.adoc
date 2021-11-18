@@ -3,15 +3,26 @@
 
 We love contributions!
 
-The project is written in https://golang.org/[go] and contains some parts written in Java for the https://github.com/apache/camel-k-runtime/[integration runtime].
+The https://github.com/apache/camel-k/[main project] is written in https://golang.org/[go] and contains some parts written in Java for the https://github.com/apache/camel-k-runtime/[integration runtime].
 Camel K is built on top of Kubernetes through *Custom Resource Definitions*.
+
+[[how]]
+== How can I contribute?
+
+There are many ways you can contribute to Camel K, not only software development, as well as with the rest of Camel community:
+
+* Contribute actively to development (see the section below)
+* Use it and report any feedback, improvement or bug you may find via https://github.com/apache/camel-k/[Github], link:/community/mailing-list/[mailing list] or https://camel.zulipchat.com[chat].
+* Contribute by writing missing documentation or blog posts about the features around Camel K
+* https://twitter.com/ApacheCamel[Tweet], like and socialize Camel K in your preferred social network
+* Enjoy the talks that the contributors submit in various conferences around the world
 
 [[requirements]]
 == Requirements
 
 In order to build the project, you need to comply with the following requirements:
 
-* **Go version 1.13+**: needed to compile and test the project. Refer to the https://golang.org/[Go website] for the installation.
+* **Go version 1.16+**: needed to compile and test the project. Refer to the https://golang.org/[Go website] for the installation.
 * **GNU Make**: used to define composite build actions. This should be already installed or available as a package if you have a good OS (https://www.gnu.org/software/make/).
 
 The Camel K Java runtime (camel-k-runtime) requires:
@@ -30,7 +41,7 @@ You can run checks via `make lint`, or you can install a GIT pre-commit hook and
 [[checking-out]]
 == Checking Out the Sources
 
-You can create a fork of this project from GitHub, then clone your fork with the `git` command line tool.
+You can create a fork of https://github.com/apache/camel-k[this project] from GitHub, then clone your fork with the `git` command line tool.
 
 [[structure]]
 == Structure
@@ -64,7 +75,6 @@ make
 
 This executes a full build of the Go code. If you need to build the components separately you can execute:
 
-* `make build-operator`: to build the operator binary only.
 * `make build-kamel`: to build the `kamel` client tool only.
 
 After a successful build, if you're connected to a Docker daemon, you can build the operator Docker image by running:
@@ -74,11 +84,11 @@ After a successful build, if you're connected to a Docker daemon, you can build 
 make images
 ----
 
-The above command produces a `camel-k` image with the name `docker.io/apache/camel-k`. Sometimes you might need to produce camel-k images that need to be pushed to the custom repository e.g. `docker.io/myrepo/camel-k`, to do that you can pass a parameter `imgDestination` to the make as shown below:
+The above command produces a `camel-k` image with the name `docker.io/apache/camel-k`. Sometimes you might need to produce `camel-k` images that need to be pushed to the custom repository e.g. `docker.io/myrepo/camel-k`, to do that you can pass a parameter `STAGING_IMAGE_NAME` to `make` as shown below:
 
 [source]
 ----
-make imgDestination='docker.io/myrepo' images
+make STAGING_IMAGE_NAME='docker.io/myrepo/camel-k' images-push-staging
 ----
 
 [[testing]]
@@ -87,27 +97,11 @@ make imgDestination='docker.io/myrepo' images
 Unit tests are executed automatically as part of the build. They use the standard go testing framework.
 
 Integration tests (aimed at ensuring that the code integrates correctly with Kubernetes and OpenShift), need special care.
-
-The **convention** used in this repo is to name tests `xxx_test.go`.
 Integration tests are all in the https://github.com/apache/camel-k/tree/main/e2e[/e2e] dir.
 
-Since both names end with `_test.go`, both would be executed by go during the build, so you need to put a special **build tag** to mark
-integration tests. An integration test should start with the following line:
+For more detail on integration testing, refer to the following documentation:
 
-[source]
-----
-// +build integration
-----
-
-Look into the https://github.com/apache/camel-k/tree/main/e2e[/e2e] directory for examples of integration tests.
-
-Before running an integration test, you need to be connected to a Kubernetes/OpenShift namespace.
-After you log in into your cluster, you can run the following command to execute **all** integration tests:
-
-[source]
-----
-make test-integration
-----
+- xref:contributing/e2e.adoc[End To End local integration test]
 
 [[running]]
 == Running
@@ -127,18 +121,22 @@ If you want to install everything you have in your source code and see it runnin
 
 The commands assume you have an already running CRC instance and logged in correctly.
 
-=== For Minishift
-
-* Run `make install-minishift` (or just `make install`): to build the project and install it in the current namespace on Minishift
-* You can specify a different namespace with `make install-minishift project=myawesomeproject`
-
-This command assumes you have an already running Minishift instance.
-
 === For Minikube
 
 * Run `make install-minikube`: to build the project and install it in the current namespace on Minikube
 
-This command assumes you have an already running Minikube instance.
+This command assumes you have an already running Minikube instance with registry enabled (can be enabled with `minikube addons enable registry`) and no previous Camel K instance installed.
+
+=== For remote Kubernetes/OpenShift clusters
+
+If you have changed anything locally and want to apply the changes to a remote cluster, first push your `camel-k` image to a custom repository (see <<building>>) and run the following command (the image name `docker.io/myrepo/camel-k:1.5.0-SNAPSHOT` should be changed accordingly):
+
+[source]
+----
+kamel install --operator-image=docker.io/myrepo/camel-k:1.5.0-SNAPSHOT --operator-image-pull-policy=Always --olm=false
+----
+
+Note `--olm=false` is necessary as otherwise the OLM bundle version is preferred.
 
 === Use
 
@@ -194,7 +192,7 @@ When configuring the IDE task, make sure to add all required environment variabl
 
 After you set up the IDE task, with Java 11+ to be used by default, you can run and debug the operator process.
 
-NOTE: The operator can be fully debugged in Minishift, because it uses OpenShift S2I binary builds under the hood.
+NOTE: The operator can be fully debugged in CRC, because it uses OpenShift S2I binary builds under the hood.
 The build phase cannot be (currently) debugged in Minikube because the Kaniko builder requires that the operator and the publisher pod share a common persistent volume.
 
 [[publishing]]
@@ -203,21 +201,6 @@ The build phase cannot be (currently) debugged in Minikube because the Kaniko bu
 Publishing to an operator hub requires creation and submission of metadata, required in a specific
 https://github.com/operator-framework/operator-registry/#manifest-format[format]. The
 https://sdk.operatorframework.io/docs/cli[operator-sdk] provides tools to help with the creation of this metadata.
-
-There are two formats for the publishing of the metadata:
-
-=== Package Manifests
-The legacy packaging format used for deploying the operator to an OLM registry. While deprecated in Openshift 4.5+,
-it is still supported and used on that and other cluster types. A single CSV is generated, comprising of the operator
-CRDs, and additional files. All versions of the operator metadata are located into a single directory.
-
-To generate the metadata for camel-k in the legacy format, use the following command:
-----
-make build-olm
-----
-The CSV and accompanying files are located in `deploy/olm-catalog`.
-
-NOTE: These files are under version control.
 
 === `bundles`
 The latest packaging format used for deploying the operator to an OLM registry. This generates a CSV and related metadata

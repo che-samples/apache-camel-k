@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 /*
@@ -25,17 +26,21 @@ import (
 	"fmt"
 	"testing"
 
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
+
+	routev1 "github.com/openshift/api/route/v1"
 
 	"github.com/apache/camel-k/pkg/client"
 	"github.com/apache/camel-k/pkg/client/camel/clientset/versioned"
 	"github.com/apache/camel-k/pkg/util/kubernetes"
+	"github.com/apache/camel-k/pkg/util/openshift"
 )
 
 // Dump prints all information about the given namespace to debug errors
 func Dump(ctx context.Context, c client.Client, ns string, t *testing.T) error {
-
 	t.Logf("-------------------- start dumping namespace %s --------------------\n", ns)
 
 	camelClient, err := versioned.NewForConfig(c.GetConfig())
@@ -49,7 +54,7 @@ func Dump(ctx context.Context, c client.Client, ns string, t *testing.T) error {
 	t.Logf("Found %d platforms:\n", len(pls.Items))
 	for _, p := range pls.Items {
 		ref := p
-		pdata, err := kubernetes.ToYAML(&ref)
+		pdata, err := kubernetes.ToYAMLNoManagedFields(&ref)
 		if err != nil {
 			return err
 		}
@@ -63,7 +68,7 @@ func Dump(ctx context.Context, c client.Client, ns string, t *testing.T) error {
 	t.Logf("Found %d integrations:\n", len(its.Items))
 	for _, integration := range its.Items {
 		ref := integration
-		pdata, err := kubernetes.ToYAML(&ref)
+		pdata, err := kubernetes.ToYAMLNoManagedFields(&ref)
 		if err != nil {
 			return err
 		}
@@ -77,21 +82,34 @@ func Dump(ctx context.Context, c client.Client, ns string, t *testing.T) error {
 	t.Logf("Found %d integration kits:\n", len(iks.Items))
 	for _, ik := range iks.Items {
 		ref := ik
-		pdata, err := kubernetes.ToYAML(&ref)
+		pdata, err := kubernetes.ToYAMLNoManagedFields(&ref)
 		if err != nil {
 			return err
 		}
 		t.Logf("---\n%s\n---\n", string(pdata))
 	}
 
+	builds, err := camelClient.CamelV1().Builds(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	t.Logf("Found %d builds:\n", len(builds.Items))
+	for _, build := range builds.Items {
+		data, err := kubernetes.ToYAMLNoManagedFields(&build)
+		if err != nil {
+			return err
+		}
+		t.Logf("---\n%s\n---\n", string(data))
+	}
+
 	cms, err := c.CoreV1().ConfigMaps(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
-	t.Logf("Found %d ConfigMaps:\n", len(cms.Items))
+	t.Logf("Found %d config maps:\n", len(cms.Items))
 	for _, cm := range cms.Items {
 		ref := cm
-		pdata, err := kubernetes.ToYAML(&ref)
+		pdata, err := kubernetes.ToYAMLNoManagedFields(&ref)
 		if err != nil {
 			return err
 		}
@@ -105,7 +123,7 @@ func Dump(ctx context.Context, c client.Client, ns string, t *testing.T) error {
 	t.Logf("Found %d deployments:\n", len(iks.Items))
 	for _, deployment := range deployments.Items {
 		ref := deployment
-		data, err := kubernetes.ToYAML(&ref)
+		data, err := kubernetes.ToYAMLNoManagedFields(&ref)
 		if err != nil {
 			return err
 		}
@@ -122,7 +140,7 @@ func Dump(ctx context.Context, c client.Client, ns string, t *testing.T) error {
 		t.Logf("name=%s\n", pod.Name)
 		dumpConditions("  ", pod.Status.Conditions, t)
 		t.Logf("  logs:\n")
-		var allContainers []v1.Container
+		var allContainers []corev1.Container
 		allContainers = append(allContainers, pod.Spec.InitContainers...)
 		allContainers = append(allContainers, pod.Spec.Containers...)
 		for _, container := range allContainers {
@@ -135,11 +153,47 @@ func Dump(ctx context.Context, c client.Client, ns string, t *testing.T) error {
 		}
 	}
 
+	svcs, err := c.CoreV1().Services(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	t.Logf("\nFound %d services:\n", len(svcs.Items))
+	for _, svc := range svcs.Items {
+		ref := svc
+		data, err := kubernetes.ToYAMLNoManagedFields(&ref)
+		if err != nil {
+			return err
+		}
+		t.Logf("---\n%s\n---\n", string(data))
+	}
+
+	if ocp, err := openshift.IsOpenShift(c); err == nil && ocp {
+		routes := routev1.RouteList{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Route",
+				APIVersion: routev1.SchemeGroupVersion.String(),
+			},
+		}
+		err := c.List(ctx, &routes, ctrl.InNamespace(ns))
+		if err != nil {
+			return err
+		}
+		t.Logf("\nFound %d routes:\n", len(routes.Items))
+		for _, route := range routes.Items {
+			ref := route
+			data, err := kubernetes.ToYAMLNoManagedFields(&ref)
+			if err != nil {
+				return err
+			}
+			t.Logf("---\n%s\n---\n", string(data))
+		}
+	}
+
 	t.Logf("-------------------- end dumping namespace %s --------------------\n", ns)
 	return nil
 }
 
-func dumpConditions(prefix string, conditions []v1.PodCondition, t *testing.T) {
+func dumpConditions(prefix string, conditions []corev1.PodCondition, t *testing.T) {
 	for _, cond := range conditions {
 		t.Logf("%scondition type=%s, status=%s, reason=%s, message=%q\n", prefix, cond.Type, cond.Status, cond.Reason, cond.Message)
 	}
@@ -147,7 +201,7 @@ func dumpConditions(prefix string, conditions []v1.PodCondition, t *testing.T) {
 
 func dumpLogs(ctx context.Context, c client.Client, prefix string, ns string, name string, container string, t *testing.T) error {
 	lines := int64(50)
-	stream, err := c.CoreV1().Pods(ns).GetLogs(name, &v1.PodLogOptions{
+	stream, err := c.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{
 		Container: container,
 		TailLines: &lines,
 	}).Stream(ctx)

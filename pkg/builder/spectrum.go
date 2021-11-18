@@ -18,6 +18,7 @@ limitations under the License.
 package builder
 
 import (
+	"bufio"
 	"context"
 	"io/ioutil"
 	"os"
@@ -26,10 +27,12 @@ import (
 	"strings"
 
 	spectrum "github.com/container-tools/spectrum/pkg/builder"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1 "github.com/apache/camel-k/pkg/apis/camel/v1"
 	"github.com/apache/camel-k/pkg/client"
+	"github.com/apache/camel-k/pkg/util"
 	"github.com/apache/camel-k/pkg/util/log"
 )
 
@@ -50,16 +53,33 @@ func (t *spectrumTask) Do(ctx context.Context) v1.BuildStatus {
 		status.BaseImage = baseImage
 	}
 
-	libraryPath := path.Join(t.task.ContextDir, DependenciesDir)
-	_, err := os.Stat(libraryPath)
-	if err != nil && os.IsNotExist(err) {
-		// this can only indicate that there are no more libraries to add to the base image,
-		// because transitive resolution is the same even if spec differs
+	contextDir := t.task.ContextDir
+	if contextDir == "" {
+		// Use the working directory.
+		// This is useful when the task is executed in-container,
+		// so that its WorkingDir can be used to share state and
+		// coordinate with other tasks.
+		pwd, err := os.Getwd()
+		if err != nil {
+			return status.Failed(err)
+		}
+		contextDir = path.Join(pwd, ContextDir)
+	}
+
+	exists, err := util.DirectoryExists(contextDir)
+	if err != nil {
+		return status.Failed(err)
+	}
+	empty, err := util.DirectoryEmpty(contextDir)
+	if err != nil {
+		return status.Failed(err)
+	}
+	if !exists || empty {
+		// this can only indicate that there are no more resources to add to the base image,
+		// because transitive resolution is the same even if spec differs.
 		log.Infof("No new image to build, reusing existing image %s", baseImage)
 		status.Image = baseImage
 		return status
-	} else if err != nil {
-		return status.Failed(err)
 	}
 
 	pullInsecure := t.task.Registry.Insecure // incremental build case
@@ -83,6 +103,15 @@ func (t *spectrumTask) Do(ctx context.Context) v1.BuildStatus {
 		defer os.RemoveAll(registryConfigDir)
 	}
 
+	newStdR, newStdW, pipeErr := os.Pipe()
+	defer newStdW.Close()
+
+	if pipeErr != nil {
+		// In the unlikely case of an error, use stdout instead of aborting
+		log.Errorf(pipeErr, "Unable to remap I/O. Spectrum messages will be displayed on the stdout")
+		newStdW = os.Stdout
+	}
+
 	options := spectrum.Options{
 		PullInsecure:  pullInsecure,
 		PushInsecure:  t.task.Registry.Insecure,
@@ -90,12 +119,13 @@ func (t *spectrumTask) Do(ctx context.Context) v1.BuildStatus {
 		PushConfigDir: registryConfigDir,
 		Base:          baseImage,
 		Target:        t.task.Image,
-		Stdout:        os.Stdout,
-		Stderr:        os.Stderr,
+		Stdout:        newStdW,
+		Stderr:        newStdW,
 		Recursive:     true,
 	}
 
-	digest, err := spectrum.Build(options, libraryPath+":"+path.Join(DeploymentDir, DependenciesDir))
+	go readSpectrumLogs(newStdR)
+	digest, err := spectrum.Build(options, contextDir+":"+path.Join(DeploymentDir))
 	if err != nil {
 		return status.Failed(err)
 	}
@@ -104,6 +134,15 @@ func (t *spectrumTask) Do(ctx context.Context) v1.BuildStatus {
 	status.Digest = digest
 
 	return status
+}
+
+func readSpectrumLogs(newStdOut *os.File) {
+	scanner := bufio.NewScanner(newStdOut)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		log.Infof(line)
+	}
 }
 
 func mountSecret(ctx context.Context, c client.Client, namespace, name string) (string, error) {
@@ -119,7 +158,7 @@ func mountSecret(ctx context.Context, c client.Client, namespace, name string) (
 	}
 
 	for file, content := range secret.Data {
-		if err := ioutil.WriteFile(filepath.Join(dir, remap(file)), content, 0600); err != nil {
+		if err := ioutil.WriteFile(filepath.Join(dir, remap(file)), content, 0o600); err != nil {
 			os.RemoveAll(dir)
 			return "", err
 		}

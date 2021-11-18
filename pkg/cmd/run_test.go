@@ -30,10 +30,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const cmdRun = "run"
-const integrationSource = "example.js"
+const (
+	cmdRun            = "run"
+	integrationSource = "example.js"
+)
 
+// nolint: unparam
 func initializeRunCmdOptions(t *testing.T) (*runCmdOptions, *cobra.Command, RootCmdOptions) {
+	t.Helper()
+
 	options, rootCmd := kamelTestPreAddCommandInit()
 	runCmdOptions := addTestRunCmd(*options, rootCmd)
 	kamelTestPostAddCommandInit(t, rootCmd)
@@ -42,7 +47,7 @@ func initializeRunCmdOptions(t *testing.T) (*runCmdOptions, *cobra.Command, Root
 }
 
 func addTestRunCmd(options RootCmdOptions, rootCmd *cobra.Command) *runCmdOptions {
-	//add a testing version of run Command
+	// add a testing version of run Command
 	runCmd, runOptions := newCmdRun(&options)
 	runCmd.RunE = func(c *cobra.Command, args []string) error {
 		return nil
@@ -59,7 +64,7 @@ func TestRunNoFlag(t *testing.T) {
 	runCmdOptions, rootCmd, _ := initializeRunCmdOptions(t)
 	_, err := test.ExecuteCommand(rootCmd, cmdRun, integrationSource)
 	assert.Nil(t, err)
-	//Check default expected values
+	// Check default expected values
 	assert.Equal(t, false, runCmdOptions.Wait)
 	assert.Equal(t, false, runCmdOptions.Logs)
 	assert.Equal(t, false, runCmdOptions.Sync)
@@ -154,18 +159,6 @@ func TestRunLabelWrongFormatFlag(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-func TestRunLoggingLevelFlag(t *testing.T) {
-	runCmdOptions, rootCmd, _ := initializeRunCmdOptions(t)
-	_, err := test.ExecuteCommand(rootCmd, cmdRun,
-		"--logging-level", "lev1",
-		"--logging-level", "lev2",
-		integrationSource)
-	assert.Nil(t, err)
-	assert.Len(t, runCmdOptions.LoggingLevels, 2)
-	assert.Equal(t, "lev1", runCmdOptions.LoggingLevels[0])
-	assert.Equal(t, "lev2", runCmdOptions.LoggingLevels[1])
-}
-
 func TestRunLogsFlag(t *testing.T) {
 	runCmdOptions, rootCmd, _ := initializeRunCmdOptions(t)
 	_, err := test.ExecuteCommand(rootCmd, cmdRun, "--logs", integrationSource)
@@ -245,10 +238,13 @@ func TestRunPropertyFileFlagMissingFileExtension(t *testing.T) {
 
 const TestPropertyFileContent = `
 a=b
-c\=d=e
-d=c\=e
+# There's an issue in the properties lib: https://github.com/magiconair/properties/issues/59
+# so the following cases have been commented. Btw, we don't use equal sign in keys
+#c\=d=e
+#d=c\=e
 #ignore=me
-f=g\:h
+f=g:h
+i=j\nk
 `
 
 func TestAddPropertyFile(t *testing.T) {
@@ -259,15 +255,14 @@ func TestAddPropertyFile(t *testing.T) {
 	}
 
 	assert.Nil(t, tmpFile.Close())
-	assert.Nil(t, ioutil.WriteFile(tmpFile.Name(), []byte(TestPropertyFileContent), 0644))
+	assert.Nil(t, ioutil.WriteFile(tmpFile.Name(), []byte(TestPropertyFileContent), 0o644))
 
-	spec := v1.IntegrationSpec{}
-	assert.Nil(t, addPropertyFile(tmpFile.Name(), &spec))
-	assert.Equal(t, 4, len(spec.Configuration))
-	assert.Equal(t, `a=b`, spec.Configuration[0].Value)
-	assert.Equal(t, `c\=d=e`, spec.Configuration[1].Value)
-	assert.Equal(t, `d=c\=e`, spec.Configuration[2].Value)
-	assert.Equal(t, `f=g\:h`, spec.Configuration[3].Value)
+	properties, err := convertToTraitParameter("file:"+tmpFile.Name(), "trait.properties")
+	assert.Nil(t, err)
+	assert.Equal(t, 3, len(properties))
+	assert.Equal(t, `trait.properties=a = b`, properties[0])
+	assert.Equal(t, `trait.properties=f = g:h`, properties[1])
+	assert.Equal(t, `trait.properties=i = j\nk`, properties[2])
 }
 
 func TestRunPropertyFileFlag(t *testing.T) {
@@ -278,7 +273,7 @@ func TestRunPropertyFileFlag(t *testing.T) {
 	}
 
 	assert.Nil(t, tmpFile.Close())
-	assert.Nil(t, ioutil.WriteFile(tmpFile.Name(), []byte(TestPropertyFileContent), 0644))
+	assert.Nil(t, ioutil.WriteFile(tmpFile.Name(), []byte(TestPropertyFileContent), 0o644))
 
 	runCmdOptions, rootCmd, _ := initializeRunCmdOptions(t)
 	_, errExecute := test.ExecuteCommand(rootCmd, cmdRun,
@@ -287,6 +282,13 @@ func TestRunPropertyFileFlag(t *testing.T) {
 	assert.Nil(t, errExecute)
 	assert.Len(t, runCmdOptions.PropertyFiles, 1)
 	assert.Equal(t, tmpFile.Name(), runCmdOptions.PropertyFiles[0])
+}
+
+func TestRunProperty(t *testing.T) {
+	properties, err := convertToTraitParameter(`key=value\nnewline`, "trait.properties")
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(properties))
+	assert.Equal(t, `trait.properties=key = value\nnewline`, properties[0])
 }
 
 func TestRunResourceFlag(t *testing.T) {
@@ -363,7 +365,7 @@ func TestConfigureTraits(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	catalog := trait.NewCatalog(runCmdOptions.Context, client)
+	catalog := trait.NewCatalog(client)
 
 	traits, err := configureTraits(runCmdOptions.Traits, catalog)
 
@@ -377,6 +379,8 @@ func TestConfigureTraits(t *testing.T) {
 }
 
 func assertTraitConfiguration(t *testing.T, traits map[string]v1.TraitSpec, trait string, expected string) {
+	t.Helper()
+
 	assert.Contains(t, traits, trait)
 	assert.Equal(t, expected, string(traits[trait].Configuration.RawMessage))
 }
@@ -409,6 +413,18 @@ func TestRunVolumeFlagWrongPVCFormat(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
+func TestRunBuildPropertyFlag(t *testing.T) {
+	runCmdOptions, rootCmd, _ := initializeRunCmdOptions(t)
+	_, err := test.ExecuteCommand(rootCmd, cmdRun,
+		"--build-property", "build-prop1=val1",
+		"--build-property", "build-prop2=val2",
+		integrationSource)
+	assert.Nil(t, err)
+	assert.Len(t, runCmdOptions.BuildProperties, 2)
+	assert.Equal(t, "build-prop1=val1", runCmdOptions.BuildProperties[0])
+	assert.Equal(t, "build-prop2=val2", runCmdOptions.BuildProperties[1])
+}
+
 func TestRunValidateArgs(t *testing.T) {
 	runCmdOptions, rootCmd, _ := initializeRunCmdOptions(t)
 	args := []string{}
@@ -423,7 +439,7 @@ func TestRunValidateArgs(t *testing.T) {
 	args = []string{"missing_file"}
 	err = runCmdOptions.validateArgs(rootCmd, args)
 	assert.NotNil(t, err)
-	assert.Equal(t, "One of the provided sources is not reachable: Missing file or unsupported scheme in missing_file", err.Error())
+	assert.Equal(t, "One of the provided sources is not reachable: missing file or unsupported scheme in missing_file", err.Error())
 }
 
 //
@@ -472,7 +488,7 @@ func TestRunWithSavedValues(t *testing.T) {
 }*/
 
 func TestRunBinaryResource(t *testing.T) {
-	binaryResourceSpec, err := binaryOrTextResource("file.ext", []byte{1, 2, 3, 4}, "application/octet-stream", false)
+	binaryResourceSpec, err := binaryOrTextResource("file.ext", []byte{1, 2, 3, 4}, "application/octet-stream", false, v1.ResourceTypeData, "")
 	assert.Nil(t, err)
 	assert.Equal(t, "", binaryResourceSpec.Content)
 	assert.NotNil(t, binaryResourceSpec.RawContent)
@@ -484,7 +500,7 @@ func TestRunBinaryResource(t *testing.T) {
 func TestRunBinaryCompressedResource(t *testing.T) {
 	data := []byte{1, 2, 3, 4}
 	base64Compressed, _ := compressToString(data)
-	binaryResourceSpec, err := binaryOrTextResource("file.ext", data, "application/octet-stream", true)
+	binaryResourceSpec, err := binaryOrTextResource("file.ext", data, "application/octet-stream", true, v1.ResourceTypeData, "")
 	assert.Nil(t, err)
 	assert.Equal(t, base64Compressed, binaryResourceSpec.Content)
 	assert.Nil(t, binaryResourceSpec.RawContent)
@@ -494,7 +510,7 @@ func TestRunBinaryCompressedResource(t *testing.T) {
 }
 
 func TestRunTextResource(t *testing.T) {
-	textResourceSpec, err := binaryOrTextResource("file.ext", []byte("hello world"), "text/plain", false)
+	textResourceSpec, err := binaryOrTextResource("file.ext", []byte("hello world"), "text/plain", false, v1.ResourceTypeData, "")
 	assert.Nil(t, err)
 	assert.Equal(t, "hello world", textResourceSpec.Content)
 	assert.Nil(t, textResourceSpec.RawContent)
@@ -506,7 +522,7 @@ func TestRunTextResource(t *testing.T) {
 func TestRunTextCompressedResource(t *testing.T) {
 	data := []byte("hello horld")
 	base64Compressed, _ := compressToString(data)
-	textResourceSpec, err := binaryOrTextResource("file.ext", []byte("hello horld"), "text/plain", true)
+	textResourceSpec, err := binaryOrTextResource("file.ext", []byte("hello horld"), "text/plain", true, v1.ResourceTypeData, "")
 	assert.Nil(t, err)
 	assert.Equal(t, base64Compressed, textResourceSpec.Content)
 	assert.Nil(t, textResourceSpec.RawContent)
@@ -516,7 +532,7 @@ func TestRunTextCompressedResource(t *testing.T) {
 }
 
 func TestResolvePodTemplate(t *testing.T) {
-	//runCmdOptions, rootCmd, _ := initializeRunCmdOptions(t)
+	// runCmdOptions, rootCmd, _ := initializeRunCmdOptions(t)
 	templateText := `
 containers:
   - name: integration
@@ -536,7 +552,7 @@ volumes:
 	assert.Nil(t, err)
 	assert.NotNil(t, integrationSpec.PodTemplate)
 	assert.Equal(t, 1, len(integrationSpec.PodTemplate.Spec.Containers))
-	//assert.Equal(t, 1,len(integrationSpec.PodTemplate.Spec.Containers[0].VolumeMounts))
+	// assert.Equal(t, 1,len(integrationSpec.PodTemplate.Spec.Containers[0].VolumeMounts))
 }
 
 func TestResolveJsonPodTemplate(t *testing.T) {
@@ -550,9 +566,10 @@ func TestResolveJsonPodTemplate(t *testing.T) {
 	assert.Equal(t, 2, len(integrationSpec.PodTemplate.Spec.Containers))
 }
 
-func TestIsLocalFileAndExists(t *testing.T) {
-	value, err := isLocalAndFileExists("/root/test")
-	// must not panic because a permission error
-	assert.NotNil(t, err)
-	assert.False(t, value)
+func TestFilterBuildPropertyFiles(t *testing.T) {
+	inputValues := []string{"file:/tmp/test", "key=val"}
+	outputValues := filterBuildPropertyFiles(inputValues)
+
+	assert.Equal(t, len(outputValues), 1)
+	assert.Equal(t, outputValues[0], "/tmp/test")
 }

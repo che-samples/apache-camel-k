@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 // To enable compilation of this file in Goland, go to "Settings -> Go -> Vendoring & Build Tags -> Custom Tags" and add "integration"
@@ -432,7 +433,7 @@ ProxyPreserveHost On
 		Expect(Kamel("run", "-n", ns, "files/Java.java", "--name", name).Execute()).To(Succeed())
 
 		Eventually(IntegrationPodPhase(ns, name), TestTimeoutMedium).Should(Equal(corev1.PodRunning))
-		Eventually(IntegrationCondition(ns, name, v1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(corev1.ConditionTrue))
+		Eventually(IntegrationConditionStatus(ns, name, v1.IntegrationConditionReady), TestTimeoutShort).Should(Equal(corev1.ConditionTrue))
 		Eventually(IntegrationLogs(ns, name), TestTimeoutShort).Should(ContainSubstring("Magicstring!"))
 
 		// Assert no dependencies have been downloaded from the Maven central repository
@@ -453,7 +454,7 @@ ProxyPreserveHost On
 	})
 }
 
-func getRepositoryAttributes(repository maven.Repository) []string {
+func getRepositoryAttributes(repository v1.Repository) []string {
 	var attributes []string
 	if repository.ID != "" {
 		attributes = append(attributes, "@id="+repository.ID)
