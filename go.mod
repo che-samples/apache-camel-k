@@ -11,7 +11,7 @@ require (
 	github.com/container-tools/spectrum v0.3.4
 	github.com/containerd/continuity v0.0.0-20210208174643-50096c924a4e // indirect
 	github.com/evanphx/json-patch v4.11.0+incompatible
-	github.com/fatih/camelcase v1.0.0 // indirect
+	github.com/fatih/camelcase v1.0.0
 	github.com/fatih/structs v1.1.0
 	github.com/gertd/go-pluralize v0.1.1
 	github.com/go-logr/logr v0.4.0
@@ -21,7 +21,7 @@ require (
 	github.com/jpillora/backoff v1.0.0
 	github.com/magiconair/properties v1.8.5
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/mitchellh/mapstructure v1.1.2
+	github.com/mitchellh/mapstructure v1.4.3
 	github.com/onsi/gomega v1.16.0
 	github.com/openshift/api v3.9.1-0.20190927182313-d4a64ec2cbd8+incompatible
 	github.com/operator-framework/api v0.3.8
@@ -39,12 +39,12 @@ require (
 	github.com/sirupsen/logrus v1.8.1
 	github.com/spf13/cobra v1.1.3
 	github.com/spf13/pflag v1.0.5
-	github.com/spf13/viper v1.7.0
+	github.com/spf13/viper v1.10.1
 	github.com/stoewer/go-strcase v1.2.0
 	github.com/stretchr/testify v1.7.0
 	go.uber.org/multierr v1.6.0
 	go.uber.org/zap v1.19.1
-	golang.org/x/oauth2 v0.0.0-20211028175245-ba495a64dcb5
+	golang.org/x/oauth2 v0.0.0-20211104180415-d3ed0bb246c8
 	gopkg.in/inf.v0 v0.9.1
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.21.4
