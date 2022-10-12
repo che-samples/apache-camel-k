@@ -11,7 +11,7 @@ require (
 	github.com/container-tools/spectrum v0.3.4
 	github.com/containerd/continuity v0.0.0-20210208174643-50096c924a4e // indirect
 	github.com/evanphx/json-patch v4.11.0+incompatible
-	github.com/fatih/camelcase v1.0.0 // indirect
+	github.com/fatih/camelcase v1.0.0
 	github.com/fatih/structs v1.1.0
 	github.com/gertd/go-pluralize v0.1.1
 	github.com/go-logr/logr v0.4.0
@@ -37,7 +37,7 @@ require (
 	github.com/shurcooL/httpfs v0.0.0-20190707220628-8d4bc4ba7749
 	github.com/shurcooL/vfsgen v0.0.0-20181202132449-6a9ea43bcacd
 	github.com/sirupsen/logrus v1.8.1
-	github.com/spf13/cobra v1.1.3
+	github.com/spf13/cobra v1.6.0
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.7.0
 	github.com/stoewer/go-strcase v1.2.0
